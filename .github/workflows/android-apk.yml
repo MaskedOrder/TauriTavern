@@ -2,8 +2,11 @@
 name: Build Android APK
 
 on:
+  push:
+    branches:
+      - moonshot-kimi-prefill
   workflow_dispatch:
-
+  
 permissions:
   contents: read
 
