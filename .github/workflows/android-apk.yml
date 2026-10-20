@@ -78,7 +78,12 @@ jobs:
 
       - name: Configure Android networking
         run: ./scripts/ci/configure-mobile-http.sh enable android
-
+      
+      - name: Regenerate Android project
+        run: |
+          rm -rf src-tauri/crates/tauritavern/gen/android
+          node scripts/tauri-app.mjs android init
+          
       - name: Prepare temporary Android signing config
         shell: bash
         run: |
