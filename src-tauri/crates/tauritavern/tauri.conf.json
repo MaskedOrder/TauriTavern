@@ -2,7 +2,8 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "TauriTavern",
   "version": "2.3.0",
-  "identifier": "com.tauritavern.client",
+
+"identifier": "com.tauritavern.client.custom",
   "build": {
     "beforeBuildCommand": {
       "script": "node scripts/tauri-before-build.mjs",
