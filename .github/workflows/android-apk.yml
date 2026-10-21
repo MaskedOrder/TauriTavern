@@ -83,6 +83,9 @@ jobs:
         run: |
           rm -rf src-tauri/crates/tauritavern/gen/android
           node scripts/tauri-app.mjs android init
+          cat > src-tauri/crates/tauritavern/tauri <<'EOF'
+          import "../../../scripts/tauri-app.mjs";
+          EOF
           
       - name: Prepare temporary Android signing config
         shell: bash
