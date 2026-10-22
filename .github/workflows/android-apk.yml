@@ -78,7 +78,7 @@ jobs:
 
       - name: Configure Android networking
         run: ./scripts/ci/configure-mobile-http.sh enable android
-      
+
       - name: Regenerate Android project
         shell: bash
         run: |
@@ -98,11 +98,16 @@ jobs:
           mkdir -p "$SOURCE_DIR"
           cp -a "$BACKUP_DIR/." "$SOURCE_DIR/"
 
-          # Restore the Tauri launcher script.
+          # Create the Android launcher script.
           cat > "$ANDROID_DIR/tauri" <<'EOF'
           import "../../../scripts/tauri-app.mjs";
           EOF
-          
+
+          # Create the launcher expected by the build.
+          cat > "src-tauri/crates/tauritavern/tauri" <<'EOF'
+          import "../../../scripts/tauri-app.mjs";
+          EOF
+
       - name: Prepare temporary Android signing config
         shell: bash
         run: |
@@ -122,6 +127,15 @@ jobs:
           password=android
           storeFile=ci-release.keystore
           EOF
+
+      - name: Verify Tauri launcher scripts
+        shell: bash
+        run: |
+          set -e
+          test -f src-tauri/crates/tauritavern/tauri
+          test -f src-tauri/crates/tauritavern/gen/android/tauri
+          cat src-tauri/crates/tauritavern/tauri
+          cat src-tauri/crates/tauritavern/gen/android/tauri
 
       - name: Build debug APKs
         uses: tauri-apps/tauri-action@v1
