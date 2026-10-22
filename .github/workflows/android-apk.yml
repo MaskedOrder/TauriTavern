@@ -79,36 +79,6 @@ jobs:
       - name: Configure Android networking
         run: ./scripts/ci/configure-mobile-http.sh enable android
 
-      - name: Regenerate Android project
-        shell: bash
-        run: |
-          ANDROID_DIR="src-tauri/crates/tauritavern/gen/android"
-          SOURCE_DIR="$ANDROID_DIR/app/src/main/java/com/tauritavern/client"
-          BACKUP_DIR="$RUNNER_TEMP/tauritavern-client-java"
-
-          # Preserve the existing Android Kotlin source files.
-          mkdir -p "$BACKUP_DIR"
-          cp -a "$SOURCE_DIR/." "$BACKUP_DIR/"
-
-          # Regenerate the Android project.
-          rm -rf "$ANDROID_DIR"
-          node scripts/tauri-app.mjs android init
-
-          # Restore the Kotlin source files.
-          mkdir -p "$SOURCE_DIR"
-          cp -a "$BACKUP_DIR/." "$SOURCE_DIR/"
-
-          # Create the Android launcher script.
-          cat > "$ANDROID_DIR/tauri" <<'EOF'
-          import "../../../scripts/tauri-app.mjs";
-          EOF
-
-          # Create the launcher expected by the build.
-          cat > "src-tauri/crates/tauritavern/tauri" <<'EOF'
-          import "../../../scripts/tauri-app.mjs";
-          EOF
-
-
       - name: Prepare existing Android project
         shell: bash
         run: |
@@ -129,12 +99,6 @@ jobs:
           cat > "src-tauri/crates/tauritavern/tauri" <<'EOF'
           import "../../../scripts/tauri-app.mjs";
           EOF
-
-      - name: Diagnose Android build
-        shell: bash
-        run: |
-          cd src-tauri/crates/tauritavern
-          node ../../../scripts/tauri-app.mjs android build --verbose --debug --apk --split-per-abi --target aarch64
 
       - name: Build debug APKs
         uses: tauri-apps/tauri-action@v1
