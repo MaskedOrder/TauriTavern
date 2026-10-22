@@ -137,6 +137,12 @@ jobs:
           cat src-tauri/crates/tauritavern/tauri
           cat src-tauri/crates/tauritavern/gen/android/tauri
 
+      - name: Diagnose Android build
+        shell: bash
+        run: |
+          cd src-tauri/crates/tauritavern
+          node ../../../scripts/tauri-app.mjs android build --verbose --debug --apk --split-per-abi --target aarch64
+
       - name: Build debug APKs
         uses: tauri-apps/tauri-action@v1
         env:
