@@ -80,10 +80,26 @@ jobs:
         run: ./scripts/ci/configure-mobile-http.sh enable android
       
       - name: Regenerate Android project
+        shell: bash
         run: |
-          rm -rf src-tauri/crates/tauritavern/gen/android
+          ANDROID_DIR="src-tauri/crates/tauritavern/gen/android"
+          SOURCE_DIR="$ANDROID_DIR/app/src/main/java/com/tauritavern/client"
+          BACKUP_DIR="$RUNNER_TEMP/tauritavern-client-java"
+
+          # Preserve the existing Android Kotlin source files.
+          mkdir -p "$BACKUP_DIR"
+          cp -a "$SOURCE_DIR/." "$BACKUP_DIR/"
+
+          # Regenerate the Android project.
+          rm -rf "$ANDROID_DIR"
           node scripts/tauri-app.mjs android init
-          cat > src-tauri/crates/tauritavern/tauri <<'EOF'
+
+          # Restore the Kotlin source files.
+          mkdir -p "$SOURCE_DIR"
+          cp -a "$BACKUP_DIR/." "$SOURCE_DIR/"
+
+          # Restore the Tauri launcher script.
+          cat > "$ANDROID_DIR/tauri" <<'EOF'
           import "../../../scripts/tauri-app.mjs";
           EOF
           
