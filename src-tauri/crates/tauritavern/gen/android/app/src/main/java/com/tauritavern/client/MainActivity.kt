@@ -1,5 +1,6 @@
 package com.tauritavern.client
 
+import app.tauri.TauriActivity
 import android.app.Activity
 import android.content.Intent
 import android.content.res.Configuration
