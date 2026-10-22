@@ -108,34 +108,27 @@ jobs:
           import "../../../scripts/tauri-app.mjs";
           EOF
 
-      - name: Prepare temporary Android signing config
-        shell: bash
-        run: |
-          cd src-tauri/crates/tauritavern/gen/android
-          mkdir -p app
-          keytool -genkeypair -v \
-            -keystore app/ci-release.keystore \
-            -storepass android \
-            -alias ci-key \
-            -keypass android \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -dname "CN=CI,O=TauriTavern,C=US"
-          cat > keystore.properties <<'EOF'
-          keyAlias=ci-key
-          password=android
-          storeFile=ci-release.keystore
-          EOF
 
-      - name: Verify Tauri launcher scripts
+      - name: Prepare existing Android project
         shell: bash
         run: |
           set -e
-          test -f src-tauri/crates/tauritavern/tauri
-          test -f src-tauri/crates/tauritavern/gen/android/tauri
-          cat src-tauri/crates/tauritavern/tauri
-          cat src-tauri/crates/tauritavern/gen/android/tauri
+
+          ANDROID_DIR="src-tauri/crates/tauritavern/gen/android"
+
+          # Keep the existing Android project and its resources.
+          test -f "$ANDROID_DIR/app/build.gradle.kts"
+          test -f "$ANDROID_DIR/app/src/main/AndroidManifest.xml"
+
+          # Create the Android launcher script.
+          cat > "$ANDROID_DIR/tauri" <<'EOF'
+          import "../../../../../scripts/tauri-app.mjs";
+          EOF
+
+          # Create the launcher expected by the build.
+          cat > "src-tauri/crates/tauritavern/tauri" <<'EOF'
+          import "../../../scripts/tauri-app.mjs";
+          EOF
 
       - name: Diagnose Android build
         shell: bash
