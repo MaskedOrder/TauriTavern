@@ -118,3 +118,29 @@ jobs:
           uploadUpdaterJson: false
           uploadUpdaterSignatures: false
           workflowArtifactNamePattern: TauriTavern-custom-android-[arch]-apk
+
+      - name: Diagnose generated Android Kotlin files
+        if: always()
+        shell: bash
+        run: |
+          ANDROID_DIR="src-tauri/crates/tauritavern/gen/android"
+
+          for FILE in \
+            "$ANDROID_DIR/app/src/main/java/com/tauritavern/client/custom/generated/TauriActivity.kt" \
+            "$ANDROID_DIR/app/src/main/java/com/tauritavern/client/custom/generated/WryActivity.kt" \
+            "$ANDROID_DIR/tauri.settings.gradle" \
+            "$ANDROID_DIR/app/tauri.build.gradle.kts"
+          do
+            echo
+            echo "========== $FILE =========="
+
+            if [ -f "$FILE" ]; then
+              case "$FILE" in
+                *.kt) sed -n '1,40p' "$FILE" ;;
+                *) sed -n '1,120p' "$FILE" ;;
+              esac
+            else
+              echo "FILE NOT FOUND"
+            fi
+          done
+
