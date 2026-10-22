@@ -27,27 +27,28 @@ android {
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
     signingConfigs {
-    create("release") {
-        val keystorePropertiesFile = rootProject.file("keystore.properties")
+        create("release") {
+            val keystorePropertiesFile = rootProject.file("keystore.properties")
 
-    if (keystorePropertiesFile.exists()) {
-        val keystoreProperties = Properties()
-        keystorePropertiesFile.inputStream().use {
-            keystoreProperties.load(it)
-        }
+            if (keystorePropertiesFile.exists()) {
+                val keystoreProperties = Properties()
+                keystorePropertiesFile.inputStream().use {
+                    keystoreProperties.load(it)
+                }
 
-        val alias = keystoreProperties.getProperty("keyAlias")
-        val password = keystoreProperties.getProperty("password")
-        val storePath = keystoreProperties.getProperty("storeFile")
+                val alias = keystoreProperties.getProperty("keyAlias")
+                val password = keystoreProperties.getProperty("password")
+                val storePath = keystoreProperties.getProperty("storeFile")
 
-        if (alias != null && password != null && storePath != null) {
-            keyAlias = alias
-            keyPassword = password
-            storeFile = file(storePath)
-            storePassword = password
+                if (alias != null && password != null && storePath != null) {
+                    keyAlias = alias
+                    keyPassword = password
+                    storeFile = file(storePath)
+                    storePassword = password
+                }
+            }
         }
     }
-}
     buildTypes {
         getByName("debug") {
             manifestPlaceholders["usesCleartextTraffic"] = "true"
