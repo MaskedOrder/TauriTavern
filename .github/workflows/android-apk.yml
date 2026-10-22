@@ -89,6 +89,9 @@ jobs:
           # Keep the existing Android project and its resources.
           test -f "$ANDROID_DIR/app/build.gradle.kts"
           test -f "$ANDROID_DIR/app/src/main/AndroidManifest.xml"
+          
+          # Create the package directory expected by Tauri.
+          mkdir -p "$ANDROID_DIR/app/src/main/java/com/tauritavern/client/custom"
 
           # Create the Android launcher script.
           cat > "$ANDROID_DIR/tauri" <<'EOF'
