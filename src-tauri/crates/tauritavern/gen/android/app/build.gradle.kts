@@ -90,6 +90,7 @@ tasks.withType<KotlinCompile>().configureEach {
 }
 
 dependencies {
+    implementation(project(":tauri"))
     implementation("androidx.core:core:1.18.0-rc01")
     implementation("androidx.webkit:webkit:1.14.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
