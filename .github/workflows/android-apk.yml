@@ -90,7 +90,10 @@ jobs:
           test -f "$ANDROID_DIR/app/build.gradle.kts"
           test -f "$ANDROID_DIR/app/src/main/AndroidManifest.xml"
           
-          # Create the package directory expected by Tauri.
+          # Tauri requires this directory for the configured app identifier.
+          mkdir -p "$ANDROID_DIR/app/src/main/java/com/tauritavern/client/custom"
+
+          # Generated Kotlin activity files go here.
           mkdir -p "$ANDROID_DIR/app/src/main/java/com/tauritavern/client/generated"
 
           # Create the Android launcher script.
