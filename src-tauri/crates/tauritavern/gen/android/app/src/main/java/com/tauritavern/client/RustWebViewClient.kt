@@ -6,6 +6,8 @@
 
 package com.tauritavern.client
 
+import com.tauritavern.client.custom.Rust
+import com.tauritavern.client.custom.RustWebView
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
