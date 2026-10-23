@@ -91,7 +91,7 @@ jobs:
           test -f "$ANDROID_DIR/app/src/main/AndroidManifest.xml"
           
           # Create the package directory expected by Tauri.
-          mkdir -p "$ANDROID_DIR/app/src/main/java/com/tauritavern/client/custom"
+          mkdir -p "$ANDROID_DIR/app/src/main/java/com/tauritavern/client/generated"
 
           # Create the Android launcher script.
           cat > "$ANDROID_DIR/tauri" <<'EOF'
@@ -102,7 +102,13 @@ jobs:
           cat > "src-tauri/crates/tauritavern/tauri" <<'EOF'
           import "../../../scripts/tauri-app.mjs";
           EOF
-
+          
+      - name: Configure generated Android Kotlin package
+        shell: bash
+        run: |
+          echo "WRY_ANDROID_PACKAGE=com.tauritavern.client" >> "$GITHUB_ENV"
+          echo "WRY_ANDROID_KOTLIN_FILES_OUT_DIR=$GITHUB_WORKSPACE/src-tauri/crates/tauritavern/gen/android/app/src/main/java/com/tauritavern/client/generated" >> "$GITHUB_ENV"
+      
       - name: Build debug APKs
         uses: tauri-apps/tauri-action@v1
         env:
