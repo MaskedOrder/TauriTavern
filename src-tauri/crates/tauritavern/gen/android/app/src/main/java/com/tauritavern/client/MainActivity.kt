@@ -1,6 +1,6 @@
 package com.tauritavern.client
 
-import com.tauritavern.client.custom.generated.TauriActivity
+import com.tauritavern.client.custom.TauriActivity
 import android.app.Activity
 import android.content.Intent
 import android.content.res.Configuration
