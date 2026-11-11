@@ -28,6 +28,11 @@ android {
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
     signingConfigs {
+        getByName("debug") {
+            enableV1Signing = true
+            enableV2Signing = true
+            enableV3Signing = true
+        }
         create("release") {
             val keystorePropertiesFile = rootProject.file("keystore.properties")
 
