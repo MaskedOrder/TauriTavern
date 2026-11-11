@@ -167,26 +167,14 @@ pub(super) fn normalize_claude_response(
 }
 
 pub(super) fn normalize_gemini_response(
-    provider_name: &str,
     response: Value,
-) -> Result<ChatCompletionRepositoryGenerateResponse, DomainError> {
+) -> ChatCompletionRepositoryGenerateResponse {
     let mut report = ChatCompletionNormalizationReport::default();
     let candidates = response
         .get("candidates")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-
-    if candidates.is_empty() {
-        let mut message = format!("{provider_name} API returned no candidate");
-        if let Some(reason) = response
-            .pointer("/promptFeedback/blockReason")
-            .and_then(Value::as_str)
-        {
-            message.push_str(&format!(". Prompt was blocked due to: {reason}"));
-        }
-        return Err(DomainError::transient(message));
-    }
 
     let first_candidate = candidates
         .first()
@@ -206,31 +194,6 @@ pub(super) fn normalize_gemini_response(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-
-    let usable = parts.iter().any(|part| {
-        (part.get("thought").and_then(Value::as_bool) != Some(true)
-            && part
-                .get("text")
-                .and_then(Value::as_str)
-                .is_some_and(|text| !text.trim().is_empty()))
-            || part.get("functionCall").is_some()
-            || part.get("inlineData").is_some()
-    });
-    if !usable {
-        let finish_reason = first_candidate.get("finishReason").and_then(Value::as_str);
-        if let Some(reason) =
-            finish_reason.filter(|reason| map_gemini_finish_reason(Some(reason), false) == "length")
-        {
-            return Err(DomainError::InvalidData(format!(
-                "model.output_truncated: {provider_name} reached {reason} before returning visible output"
-            )));
-        }
-        let mut message = format!("{provider_name} Candidate text empty");
-        if let Some(reason) = finish_reason {
-            message.push_str(&format!(". Finish reason: {reason}"));
-        }
-        return Err(DomainError::transient(message));
-    }
 
     let mut text_parts = Vec::new();
     let mut reasoning_parts = Vec::new();
@@ -351,10 +314,7 @@ pub(super) fn normalize_gemini_response(
         normalized.insert("responseContent".to_string(), response_content);
     }
 
-    Ok(ChatCompletionRepositoryGenerateResponse::new(
-        Value::Object(normalized),
-        report,
-    ))
+    ChatCompletionRepositoryGenerateResponse::new(Value::Object(normalized), report)
 }
 
 pub(super) fn normalize_openai_responses_response(
@@ -781,17 +741,21 @@ fn map_claude_usage(raw_usage: Option<&Value>) -> Option<Value> {
 }
 
 fn map_gemini_finish_reason(finish_reason: Option<&str>, has_tool_calls: bool) -> String {
-    match finish_reason {
-        Some(reason)
-            if reason.eq_ignore_ascii_case("MAX_TOKENS")
-                || reason.eq_ignore_ascii_case("CONTINUATION") =>
-        {
-            "length"
-        }
-        _ if has_tool_calls => "tool_calls",
-        _ => "stop",
+    if has_tool_calls {
+        return "tool_calls".to_string();
     }
-    .to_string()
+
+    let value = finish_reason.unwrap_or("STOP");
+    if value.eq_ignore_ascii_case("MAX_TOKENS") {
+        return "length".to_string();
+    }
+
+    if value.eq_ignore_ascii_case("STOP") || value.eq_ignore_ascii_case("FINISH_REASON_UNSPECIFIED")
+    {
+        return "stop".to_string();
+    }
+
+    "stop".to_string()
 }
 
 fn map_gemini_usage(response: &Value) -> Option<Value> {
@@ -966,7 +930,6 @@ fn push_reasoning_text(texts: &mut Vec<String>, text: &str) {
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
-    use tt_domain::errors::DomainError;
 
     use super::{
         normalize_claude_response, normalize_gemini_interactions_response,
@@ -974,54 +937,14 @@ mod tests {
     };
 
     #[test]
-    fn normalize_gemini_blocked_prompt_reports_reason() {
-        let error = normalize_gemini_response(
-            "Google Gemini",
-            json!({
-                "promptFeedback": { "blockReason": "SAFETY" }
-            }),
-        )
-        .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("Google Gemini API returned no candidate")
-        );
-        assert!(
-            error
-                .to_string()
-                .contains("Prompt was blocked due to: SAFETY")
-        );
-    }
-
-    #[test]
-    fn normalize_gemini_thought_only_truncation_is_not_retryable() {
-        let error = normalize_gemini_response(
-            "Google Gemini",
-            json!({
-                "candidates": [{
-                    "content": { "parts": [{ "text": "plan", "thought": true }] },
-                    "finishReason": "MAX_TOKENS"
-                }]
-            }),
-        )
-        .unwrap_err();
-        assert!(matches!(
-            error,
-            DomainError::InvalidData(message) if message.starts_with("model.output_truncated:")
-        ));
-    }
-
-    #[test]
     fn normalize_prompt_cache_usage_preserves_total_input_and_known_zero() {
         let responses = [
             normalize_claude_response(json!({
                 "usage": { "input_tokens": 100, "cache_creation_input_tokens": 200, "cache_read_input_tokens": 700 }
             })).body,
-            normalize_gemini_response("Google Gemini", json!({
-                "usageMetadata": { "promptTokenCount": 1000, "cachedContentTokenCount": 700 },
-                "candidates": [{ "content": { "parts": [{ "text": "Hello" }] } }]
-            })).unwrap().body,
+            normalize_gemini_response(json!({
+                "usageMetadata": { "promptTokenCount": 1000, "cachedContentTokenCount": 700 }
+            })).body,
             normalize_openai_responses_response(json!({
                 "usage": { "input_tokens": 1000, "input_tokens_details": { "cached_tokens": 700 } }
             })).body,
@@ -1191,29 +1114,6 @@ mod tests {
     }
 
     #[test]
-    fn normalize_gemini_truncation_takes_precedence_over_tool_calls() {
-        for finish_reason in ["MAX_TOKENS", "CONTINUATION"] {
-            let response = json!({
-                "candidates": [{
-                    "finishReason": finish_reason,
-                    "content": { "parts": [{
-                        "functionCall": {
-                            "id": "call_weather",
-                            "name": "weather",
-                            "args": { "city": "Paris" }
-                        }
-                    }] }
-                }]
-            });
-
-            let normalized = normalize_gemini_response("Google Gemini", response)
-                .unwrap()
-                .body;
-            assert_eq!(normalized["choices"][0]["finish_reason"], "length");
-        }
-    }
-
-    #[test]
     fn normalize_gemini_function_call_maps_thought_signature() {
         let response = json!({
             "modelVersion": "gemini-3.6-flash",
@@ -1232,9 +1132,7 @@ mod tests {
             }]
         });
 
-        let normalized = normalize_gemini_response("Google Gemini", response)
-            .unwrap()
-            .body;
+        let normalized = normalize_gemini_response(response).body;
         let tool_call = normalized
             .get("choices")
             .and_then(Value::as_array)
@@ -1292,9 +1190,7 @@ mod tests {
             }]
         });
 
-        let normalized = normalize_gemini_response("Google Gemini", response)
-            .unwrap()
-            .body;
+        let normalized = normalize_gemini_response(response).body;
         let message = normalized
             .pointer("/choices/0/message")
             .and_then(Value::as_object)

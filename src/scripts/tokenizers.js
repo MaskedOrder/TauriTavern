@@ -7,7 +7,10 @@ import { getStringHash } from './utils.js';
 import { kai_flags, kai_settings } from './kai-settings.js';
 import { textgen_types, textgenerationwebui_settings as textgen_settings, getTextGenServer, getTextGenModel } from './textgen-settings.js';
 import { getCurrentDreamGenModelTokenizer, getCurrentOpenRouterModelTokenizer, openRouterModels } from './textgen-models.js';
-import { getOpenAIConversationTokenCount } from './util/openai-token-count.js';
+import {
+    getOpenAIConversationTokenCount,
+    getOpenAITextTokenCount,
+} from './util/openai-token-count.js';
 import { createSingleFlight } from './util/single-flight.js';
 
 export const BYTES_PER_TOKEN = 3.35;
@@ -159,8 +162,6 @@ const TOKENIZER_URLS = {
 
 const textEncoder = new TextEncoder();
 const objectStore = localforage.createInstance({ name: 'SillyTavern_ChatCompletions' });
-// Counts made with the old role wrappers are not reusable under the 1.19 rules.
-const TOKEN_CACHE_PREFIX = 'tokenCache:v2:';
 const TAURI_WARM_TOKENIZER_MODEL = 'gpt-4o';
 
 let tokenCacheState = {
@@ -171,7 +172,7 @@ let tokenCacheState = {
 };
 
 function getTokenCacheStorageKey(chatId) {
-    return `${TOKEN_CACHE_PREFIX}${chatId}`;
+    return `tokenCache:${chatId}`;
 }
 
 function resolveTokenCacheChatId() {
@@ -257,16 +258,11 @@ export function guesstimate(str) {
     return Math.ceil(textEncoder.encode(str).length / BYTES_PER_TOKEN);
 }
 
-function scheduleObsoleteTokenCacheCleanup() {
-    const run = async () => {
-        const keys = await objectStore.keys();
-        const obsoleteKeys = keys.filter(key => key === 'tokenCache'
-            || (key.startsWith('tokenCache:') && !key.startsWith(TOKEN_CACHE_PREFIX)));
-        await Promise.all(obsoleteKeys.map(key => objectStore.removeItem(key)));
-    };
+function scheduleLegacyTokenCacheCleanup() {
+    const run = () => objectStore.removeItem('tokenCache');
 
     const runAsync = () => {
-        void run().catch(error => console.warn('Failed to remove obsolete token caches:', error));
+        void run().catch(error => console.warn('Failed to remove legacy token cache:', error));
     };
 
     if (typeof requestIdleCallback === 'function') {
@@ -670,7 +666,7 @@ export function getTokenCount(str, padding = undefined) {
  * @deprecated Use counterWrapperOpenAIAsync instead.
  */
 function counterWrapperOpenAI(text) {
-    const message = { content: text };
+    const message = { role: 'system', content: text };
     return countTokensOpenAI(message, true);
 }
 
@@ -680,7 +676,7 @@ function counterWrapperOpenAI(text) {
  * @returns {Promise<number>} Token count.
  */
 function counterWrapperOpenAIAsync(text) {
-    const message = { content: text };
+    const message = { role: 'system', content: text };
     return countTokensOpenAIAsync(message, true);
 }
 
@@ -697,9 +693,9 @@ export async function getTokenCountsAsync(strings, padding = undefined) {
     }
 
     if (main_api === 'openai' && padding !== power_user.token_padding) {
-        const messages = strings.map(text => ({ content: text }));
+        const messages = strings.map(text => ({ role: 'system', content: text }));
         const counts = await countOpenAIMessageTokensBatchAsync(messages);
-        return counts.map((count, index) => strings[index]?.length ? count : 0);
+        return counts.map((count, index) => strings[index]?.length ? getOpenAITextTokenCount(count) : 0);
     }
 
     return Promise.all(strings.map(text => getTokenCountAsync(text, padding)));
@@ -710,7 +706,7 @@ export async function getTokenCountsAsync(strings, padding = undefined) {
  * @param {string} base Initial prefix shared by every result.
  * @param {string[]} suffixes Suffixes appended cumulatively in input order.
  * @param {number | undefined} padding Optional padding tokens.
- * @param {number | undefined} stopAt Threshold in the same units as getTokenCountAsync.
+ * @param {number | undefined} stopAt Caller-visible text token threshold; the single-message wrapper offset is excluded.
  * @returns {Promise<number[]>} Estimated token counts for each cumulative prefix.
  */
 export async function getTokenPrefixCountsAsync(base, suffixes, padding = undefined, stopAt = undefined) {
@@ -734,7 +730,7 @@ export async function getTokenPrefixCountsAsync(base, suffixes, padding = undefi
             }));
 
             if (Array.isArray(data?.token_counts) && data.token_counts.length === suffixes.length) {
-                return data.token_counts;
+                return data.token_counts.map(getOpenAITextTokenCount);
             }
         } catch (error) {
             console.warn('OpenAI token prefix count request failed, using exact batch fallback:', error);
@@ -845,7 +841,7 @@ export function getTokenizerModel(settings = null) {
     }
 
     if (oai_settings.chat_completion_source == chat_completion_sources.ELECTRONHUB && oai_settings.electronhub_model) {
-        if (oai_settings.electronhub_model.includes('gpt-4o') || oai_settings.electronhub_model.includes('gpt-5') || oai_settings.electronhub_model.includes('gpt-6-astra')) {
+        if (oai_settings.electronhub_model.includes('gpt-4o') || oai_settings.electronhub_model.includes('gpt-5')) {
             return gpt4oTokenizer;
         }
         else if (oai_settings.electronhub_model.includes('gpt-4.1') || oai_settings.electronhub_model.includes('gpt-4.5')) {
@@ -1063,7 +1059,7 @@ export function countTokensOpenAI(messages, full = false) {
         messages = [messages];
     }
 
-    const counts = [];
+    let token_count = -1;
 
     if (model === 'claude') {
         full = true;
@@ -1078,7 +1074,7 @@ export function countTokensOpenAI(messages, full = false) {
         const cachedCount = cacheObject[cacheKey];
 
         if (typeof cachedCount === 'number') {
-            counts.push(cachedCount);
+            token_count += cachedCount;
         }
 
         else {
@@ -1119,7 +1115,7 @@ export function countTokensOpenAI(messages, full = false) {
                 ? tokenCounts[i]
                 : guesstimateOpenAiMessageTokenCount(cacheMisses[i]);
 
-            counts.push(count);
+            token_count += count;
             if (tokenCounts) {
                 cacheObject[cacheMissKeys[i]] = count;
                 cacheState.dirty = true;
@@ -1127,7 +1123,9 @@ export function countTokensOpenAI(messages, full = false) {
         }
     }
 
-    return getOpenAIConversationTokenCount(counts, full);
+    if (!full) token_count -= 2;
+
+    return token_count;
 }
 
 /**
@@ -1626,7 +1624,7 @@ export async function initTokenizers() {
             sessionStorage.removeItem(TOKENIZER_WARNING_KEY);
         }
     });
-    scheduleObsoleteTokenCacheCleanup();
+    scheduleLegacyTokenCacheCleanup();
     eventSource.on(event_types.CHAT_CHANGED, chatId => {
         getTokenCacheState(chatId);
     });

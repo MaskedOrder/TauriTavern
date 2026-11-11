@@ -14,7 +14,6 @@
     border-radius: 6px;
     background: var(--black30a);
     color: var(--SmartThemeBodyColor);
-    font: inherit;
     cursor: pointer;
     user-select: none;
 }

@@ -1,39 +1,35 @@
 use async_trait::async_trait;
+use serde_json::Value;
 
-use crate::byte_reader::ByteReader;
-use tt_contracts::byte_commit::CommitBegin;
-use tt_contracts::extension_store::{EntryKind, WriteOperation};
 use tt_domain::errors::DomainError;
 
 #[async_trait]
 pub trait ExtensionStoreRepository: Send + Sync {
-    /// Open one published version; replacing its path does not change this reader.
-    async fn open_entry(
+    async fn get_json(&self, namespace: &str, table: &str, key: &str)
+    -> Result<Value, DomainError>;
+
+    async fn try_get_json(
         &self,
         namespace: &str,
         table: &str,
         key: &str,
-        kind: EntryKind,
-    ) -> Result<Option<Box<dyn ByteReader>>, DomainError>;
+    ) -> Result<Option<Value>, DomainError>;
 
-    async fn begin_commit(
+    async fn set_json(
         &self,
         namespace: &str,
         table: &str,
         key: &str,
-        operation: WriteOperation,
-    ) -> Result<CommitBegin, DomainError>;
+        value: Value,
+    ) -> Result<(), DomainError>;
 
-    async fn append_commit(
+    async fn update_json(
         &self,
-        session_id: &str,
-        offset: u64,
-        bytes: &[u8],
-    ) -> Result<u64, DomainError>;
-
-    async fn finish_commit(&self, session_id: &str, expected_size: u64) -> Result<(), DomainError>;
-
-    async fn abort_commit(&self, session_id: &str) -> Result<(), DomainError>;
+        namespace: &str,
+        table: &str,
+        key: &str,
+        value: Value,
+    ) -> Result<(), DomainError>;
 
     async fn rename_json_key(
         &self,
@@ -43,22 +39,40 @@ pub trait ExtensionStoreRepository: Send + Sync {
         new_key: &str,
     ) -> Result<(), DomainError>;
 
-    async fn delete_entry(
-        &self,
-        namespace: &str,
-        table: &str,
-        key: &str,
-        kind: EntryKind,
-    ) -> Result<(), DomainError>;
+    async fn delete_json(&self, namespace: &str, table: &str, key: &str)
+    -> Result<(), DomainError>;
 
-    async fn list_keys(
+    async fn list_json_keys(
         &self,
         namespace: &str,
         table: &str,
-        kind: EntryKind,
     ) -> Result<Vec<String>, DomainError>;
 
     async fn list_tables(&self, namespace: &str) -> Result<Vec<String>, DomainError>;
 
     async fn delete_table(&self, namespace: &str, table: &str) -> Result<(), DomainError>;
+
+    async fn get_blob(
+        &self,
+        namespace: &str,
+        table: &str,
+        key: &str,
+    ) -> Result<Vec<u8>, DomainError>;
+
+    async fn set_blob(
+        &self,
+        namespace: &str,
+        table: &str,
+        key: &str,
+        bytes: Vec<u8>,
+    ) -> Result<(), DomainError>;
+
+    async fn delete_blob(&self, namespace: &str, table: &str, key: &str)
+    -> Result<(), DomainError>;
+
+    async fn list_blob_keys(
+        &self,
+        namespace: &str,
+        table: &str,
+    ) -> Result<Vec<String>, DomainError>;
 }

@@ -60,14 +60,19 @@ pub trait LanServerEvents: Send + Sync {
     fn pairing_completed(&self);
 }
 
-#[derive(Debug, Clone)]
-pub struct LocalLanAddresses {
-    pub available: Vec<String>,
-    pub default: Option<String>,
-}
-
+#[async_trait]
 pub trait LanAddressDiscovery: Send + Sync {
-    fn local_addresses(&self, port: u16) -> Result<LocalLanAddresses, DomainError>;
+    fn list_available_addresses(&self, port: u16) -> Result<Vec<String>, DomainError>;
+    fn default_advertise_address(
+        &self,
+        port: u16,
+        available_addresses: &[String],
+    ) -> Option<String>;
+    async fn routed_advertise_address(
+        &self,
+        peer_base_url: &str,
+        local_port: u16,
+    ) -> Result<String, DomainError>;
 }
 
 #[async_trait]

@@ -12,11 +12,16 @@
 #   public *;
 #}
 
-# ML Kit (barcode scanner) instantiates these registrars through reflection.
-# firebase-components 16.1.0 keeps the classes but not their constructors, which
-# AGP 9 no longer keeps implicitly. Drop this once its consumer rules do.
--keepclassmembers class * implements com.google.firebase.components.ComponentRegistrar {
-   public <init>();
+-keepclassmembers class com.tauritavern.client.AndroidAiGenerationJsBridge {
+   @android.webkit.JavascriptInterface <methods>;
+}
+
+-keepclassmembers class com.tauritavern.client.AndroidImportArchiveJsBridge {
+   @android.webkit.JavascriptInterface <methods>;
+}
+
+-keepclassmembers class com.tauritavern.client.AndroidPublicDownloadJsBridge {
+   @android.webkit.JavascriptInterface <methods>;
 }
 
 # Uncomment this to preserve the line number information for

@@ -75,7 +75,7 @@ export function registerCharacterImportRoute(router, context, { jsonResponse }) 
             await fileInfo.cleanup?.();
         }
 
-        const normalized = context.normalizeCharacter(imported.character);
+        const normalized = context.normalizeCharacter(imported);
         context.invalidateCharacterCache();
         const fileName = String(normalized.avatar || '').replace(/\.png$/i, '');
 
@@ -83,7 +83,6 @@ export function registerCharacterImportRoute(router, context, { jsonResponse }) 
             file_name: fileName,
             replaced,
             character: normalized,
-            lorebook: imported.lorebook,
             post_import: {
                 has_agent_profiles: hasCharacterEmbeddedAgentAsset(normalized, 'agentProfiles'),
                 has_agent_skills: hasCharacterEmbeddedAgentAsset(normalized, 'skills'),

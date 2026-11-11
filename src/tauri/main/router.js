@@ -18,19 +18,18 @@ export function createRouteRegistry() {
     const routes = new Map();
     const wildcardRoutes = [];
 
-    function register(method, path, handler, { body = 'json' } = {}) {
+    function register(method, path, handler) {
         const wildcardPrefix = normalizeWildcardPrefix(path);
         if (wildcardPrefix !== null) {
             wildcardRoutes.push({
                 method: String(method || '*').toUpperCase(),
                 prefix: wildcardPrefix,
                 handler,
-                body,
             });
             return;
         }
 
-        routes.set(makeRouteKey(method, path), { handler, body });
+        routes.set(makeRouteKey(method, path), handler);
     }
 
     function findWildcardHandler(method, path) {
@@ -66,12 +65,12 @@ export function createRouteRegistry() {
         path = LEGACY_API_PATHS.get(path) ?? path;
         const specific = routes.get(makeRouteKey(method, path));
         if (specific) {
-            return { ...specific, wildcard: '' };
+            return { handler: specific, wildcard: '' };
         }
 
         const wildcard = routes.get(makeRouteKey('*', path));
         if (wildcard) {
-            return { ...wildcard, wildcard: '' };
+            return { handler: wildcard, wildcard: '' };
         }
 
         const wildcardRoute = findWildcardHandler(method, path);
@@ -81,23 +80,19 @@ export function createRouteRegistry() {
 
         return {
             handler: wildcardRoute.handler,
-            body: wildcardRoute.body,
             wildcard: path.slice(wildcardRoute.prefix.length),
         };
     }
 
     return {
-        get(path, handler, options) {
-            register('GET', path, handler, options);
+        get(path, handler) {
+            register('GET', path, handler);
         },
-        post(path, handler, options) {
-            register('POST', path, handler, options);
+        post(path, handler) {
+            register('POST', path, handler);
         },
-        all(path, handler, options) {
-            register('*', path, handler, options);
-        },
-        bodyMode(method, path) {
-            return resolve(method, path)?.body ?? 'json';
+        all(path, handler) {
+            register('*', path, handler);
         },
         canHandle(method, path) {
             const normalizedMethod = String(method || 'GET').toUpperCase();

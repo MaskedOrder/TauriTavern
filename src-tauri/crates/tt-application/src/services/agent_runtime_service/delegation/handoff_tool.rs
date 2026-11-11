@@ -3,7 +3,8 @@ use std::time::Instant;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use super::policy::AgentOperation;
+use super::policy::validate_handoff_target;
+use super::tool_error::tool_error_outcome;
 use crate::errors::ApplicationError;
 use crate::services::agent_profile_service::AgentProfileResolveInput;
 use crate::services::agent_runtime_service::AgentRuntimeService;
@@ -42,16 +43,16 @@ impl AgentRuntimeService {
         let args = match serde_json::from_value::<AgentHandoffArgs>(Value::Object(args.clone())) {
             Ok(args) => args,
             Err(error) => {
-                return Ok(AgentToolDispatchOutcome::error(
+                return Ok(tool_error_outcome(
                     call,
                     "tool.invalid_arguments",
-                    &format!("Invalid agent_handoff arguments: {error}"),
+                    &format!("invalid agent.handoff arguments: {error}"),
                     started.elapsed().as_millis(),
                 ));
             }
         };
         if let Err(message) = validate_handoff_packet(&args.handoff) {
-            return Ok(AgentToolDispatchOutcome::error(
+            return Ok(tool_error_outcome(
                 call,
                 "tool.invalid_arguments",
                 &message,
@@ -62,7 +63,7 @@ impl AgentRuntimeService {
             .pending_task_policy
             .unwrap_or(PendingTaskPolicy::DenyIfPending);
         if pending_task_policy != PendingTaskPolicy::DenyIfPending {
-            return Ok(AgentToolDispatchOutcome::error(
+            return Ok(tool_error_outcome(
                 call,
                 "tool.invalid_arguments",
                 "pendingTaskPolicy currently supports only denyIfPending",
@@ -82,23 +83,26 @@ impl AgentRuntimeService {
         .await?;
 
         if !profile.delegation.can_handoff {
-            return Ok(AgentToolDispatchOutcome::error(
+            return Ok(tool_error_outcome(
                 call,
                 "agent.handoff_policy_denied",
-                "Handoff is not available to you.",
+                &format!(
+                    "agent.profile_cannot_handoff: your current Agent configuration `{}` does not allow handoff",
+                    profile.id.as_str()
+                ),
                 started.elapsed().as_millis(),
             ));
         }
         if self.has_pending_child_tasks(run_id, invocation_id).await? {
-            return Ok(AgentToolDispatchOutcome::error(
+            return Ok(tool_error_outcome(
                 call,
                 "agent.handoff_pending_tasks",
-                "You still have unfinished delegated tasks. Use agent_await before handing off.",
+                "You still have unfinished delegated tasks. Use agent.await before handing off.",
                 started.elapsed().as_millis(),
             ));
         }
         if let Err(message) = self.validate_handoff_depth(run_id, profile).await? {
-            return Ok(AgentToolDispatchOutcome::error(
+            return Ok(tool_error_outcome(
                 call,
                 "agent.handoff_depth_exhausted",
                 &message,
@@ -108,17 +112,13 @@ impl AgentRuntimeService {
 
         let target_id = match AgentProfileId::parse(&args.agent_id) {
             Ok(target_id) => target_id,
-            Err(_) => {
-                return self
-                    .agent_target_error(
-                        call,
-                        profile,
-                        AgentOperation::Handoff,
-                        "tool.invalid_arguments",
-                        "Invalid agentId. Use an ID from the available agents below.",
-                        started,
-                    )
-                    .await;
+            Err(message) => {
+                return Ok(tool_error_outcome(
+                    call,
+                    "tool.invalid_arguments",
+                    &message,
+                    started.elapsed().as_millis(),
+                ));
             }
         };
         let target = match self
@@ -130,31 +130,23 @@ impl AgentRuntimeService {
             .await
         {
             Ok(target) => target,
-            Err(ApplicationError::NotFound(_)) => {
-                return self
-                    .agent_target_error(
-                        call,
-                        profile,
-                        AgentOperation::Handoff,
-                        "agent.target_profile_not_found",
-                        &format!("Agent `{}` is unavailable.", target_id.as_str()),
-                        started,
-                    )
-                    .await;
+            Err(ApplicationError::NotFound(message)) => {
+                return Ok(tool_error_outcome(
+                    call,
+                    "agent.target_profile_not_found",
+                    &message,
+                    started.elapsed().as_millis(),
+                ));
             }
             Err(error) => return Err(error),
         };
-        if let Err(message) = AgentOperation::Handoff.validate_target(profile, &target) {
-            return self
-                .agent_target_error(
-                    call,
-                    profile,
-                    AgentOperation::Handoff,
-                    "agent.handoff_policy_denied",
-                    &message,
-                    started,
-                )
-                .await;
+        if let Err(message) = validate_handoff_target(profile, &target) {
+            return Ok(tool_error_outcome(
+                call,
+                "agent.handoff_policy_denied",
+                &message,
+                started.elapsed().as_millis(),
+            ));
         }
         let task = self
             .create_handoff_task(
@@ -185,21 +177,25 @@ impl AgentRuntimeService {
             "status": "accepted",
             "agentId": target.id.as_str(),
         });
-        Ok(AgentToolDispatchOutcome::new(
-            AgentToolResult::ok(
-                call,
-                format!(
+        Ok(AgentToolDispatchOutcome {
+            result: AgentToolResult {
+                call_id: call.call_id.clone(),
+                tool_id: call.tool_id.clone(),
+                content: format!(
                     "Handoff accepted for Agent {}. Your part is complete.",
                     target.id.as_str()
                 ),
                 structured,
-            ),
-            AgentToolEffect::HandoffAccepted {
+                is_error: false,
+                error_code: None,
+                resource_refs: Vec::new(),
+            },
+            effect: AgentToolEffect::HandoffAccepted {
                 task_id: task.id,
                 new_invocation_id: task.child_invocation_id,
             },
-            started.elapsed().as_millis(),
-        ))
+            elapsed_ms: started.elapsed().as_millis(),
+        })
     }
 
     async fn validate_handoff_depth(
@@ -216,7 +212,7 @@ impl AgentRuntimeService {
             .count();
         if handoff_count >= profile.delegation.max_handoff_depth {
             return Ok(Err(format!(
-                "The handoff limit ({}) has been reached. Continue with the available tools.",
+                "agent.max_handoff_depth_exhausted: this run has reached the handoff limit for your current Agent configuration ({})",
                 profile.delegation.max_handoff_depth
             )));
         }

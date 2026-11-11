@@ -11,7 +11,6 @@ use crate::infrastructure::logging::llm_api_logs::{
     LlmApiLogEntryPreview, LlmApiLogEntryRaw, LlmApiLogIndexEntry, LlmApiLogStore, LlmApiRawKind,
 };
 use crate::infrastructure::paths::RuntimePaths;
-use crate::infrastructure::staging;
 use tt_application::dto::dev_observability_dto::{
     BackendLogEntryDto, DevBundleVersionDto, FrontendLogEntrySnapshotDto, LlmApiLogIndexEntryDto,
     LlmApiLogPreviewDto, LlmApiLogRawDto, LlmApiRawKindDto,
@@ -92,10 +91,7 @@ impl DevObservabilityHub {
         let backend_tail = self.tail_backend_logs(800);
         let meta = DevLogBundleMeta {
             exported_at: chrono::Utc::now().to_rfc3339(),
-            os: crate::platform::identity::HOST_IDENTITY
-                .platform
-                .as_str()
-                .to_string(),
+            os: std::env::consts::OS.to_string(),
             arch: std::env::consts::ARCH.to_string(),
             runtime_paths: DevLogBundleRuntimePaths {
                 data_root: self.runtime_paths.data_root.to_string_lossy().to_string(),
@@ -112,14 +108,12 @@ impl DevObservabilityHub {
         let backend_logs_tail_text = format_backend_tail(&backend_tail);
         let readme_text = bundle_readme();
 
-        let output_path =
-            staging::create_staged_file(&self.app_handle, "dev-bundle", "zip").await?;
-        let staged_path = output_path.clone();
+        let app_handle = self.app_handle.clone();
         let runtime_paths = self.runtime_paths.clone();
 
-        let result = tauri::async_runtime::spawn_blocking(move || {
+        tauri::async_runtime::spawn_blocking(move || {
             export_dev_log_bundle(
-                output_path,
+                &app_handle,
                 &runtime_paths,
                 DevLogBundleInput {
                     meta_json,
@@ -132,13 +126,7 @@ impl DevObservabilityHub {
         .await
         .map_err(|error| {
             DomainError::InternalError(format!("Export bundle task join error: {error}"))
-        })?;
-        if result.is_err()
-            && let Err(error) = staging::discard_file(&staged_path).await
-        {
-            tracing::warn!(%error, "Failed to discard incomplete dev bundle");
-        }
-        result
+        })?
     }
 }
 

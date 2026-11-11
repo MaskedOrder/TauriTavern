@@ -306,9 +306,8 @@ export class PromptCollection {
 
 class PromptManager {
     #isVisible = false;
+    #dryRunPending = false;
     #previewPending = false;
-    /** A skipped UI refresh is applied when the panel becomes visible. */
-    #uiStale = false;
     /**
      * Bumped on every UI render. Renders are async and may overlap (e.g. the
      * immediate preview and the debounced refresh); a render whose generation
@@ -904,7 +903,13 @@ class PromptManager {
         const visibilityTarget = this.containerElement.closest('.drawer-content') ?? this.containerElement;
         this.#visibilityObserver = new IntersectionObserver(([entry]) => {
             this.#isVisible = entry.isIntersecting;
-            if (this.#isVisible && this.#uiStale) this.render(false);
+            if (!this.#isVisible) return;
+
+            if (this.#previewPending) this.render(false);
+            if (!this.#dryRunPending) return;
+
+            this.#dryRunPending = false;
+            this.render();
         });
         this.#visibilityObserver.observe(visibilityTarget);
     }
@@ -927,12 +932,6 @@ class PromptManager {
     }
 
     async #renderPromptManagerUi() {
-        if (!this.#isVisible) {
-            this.#uiStale = true;
-            return;
-        }
-
-        this.#uiStale = false;
         const generation = ++this.#renderGeneration;
         this.profileStart('render');
         const scrollPosition = this.#getScrollPosition();
@@ -961,6 +960,7 @@ class PromptManager {
     async #renderAfterTryGenerate() {
         if (!await this.#waitUntilGenerationIsIdle()) return;
 
+        this.error = null;
         this.profileStart('filling context');
         try {
             await this.tryGenerate();
@@ -970,35 +970,43 @@ class PromptManager {
             throw error;
         } finally {
             this.profileEnd('filling context');
-            await this.render(false);
+            await this.#renderPromptManagerUi();
         }
+    }
+
+    async #renderWithoutTryGenerate() {
+        await this.#renderPromptManagerUi();
     }
 
     renderNowAndRefresh() {
         if (main_api !== 'openai') return;
         this.#previewPending = true;
-        this.render(false);
+        if (this.#isVisible) this.render(false);
         this.renderDebounced();
     }
 
     /**
      * Main rendering function
      *
-     * @param {boolean} [afterTryGenerate=true] Whether to attempt a dry run before rendering
-     * @returns {Promise<void>|void} UI-only renders can be awaited; dry runs are scheduled.
+     * @param afterTryGenerate - Whether a dry run should be attempted before rendering
      */
     render(afterTryGenerate = true) {
         if (main_api !== 'openai') return;
 
         if ('character' === this.configuration.promptOrder.strategy && null === this.activeCharacter) return;
+        this.error = null;
 
         if (afterTryGenerate === true) {
-            // Previews also write variables and emit generation events while the panel is hidden.
+            if (!this.#isVisible) {
+                this.#dryRunPending = true;
+                return;
+            }
+
             this.renderDryRunLatest();
             return;
         }
 
-        return this.#renderPromptManagerUi().catch(error => {
+        void this.#renderWithoutTryGenerate().catch(error => {
             console.error('Prompt manager render failed', error);
         });
     }
@@ -1837,6 +1845,7 @@ class PromptManager {
      * @param {import('./openai.js').ChatCompletion} chatCompletion
      */
     setChatCompletion(chatCompletion) {
+        this.#dryRunPending = false;
         const messages = chatCompletion.getMessages();
 
         this.setMessages(messages);

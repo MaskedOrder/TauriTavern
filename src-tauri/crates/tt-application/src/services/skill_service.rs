@@ -14,7 +14,7 @@ use tt_domain::models::skill::{
     SkillExportResult, SkillFileRef, SkillImportInput, SkillImportPreview, SkillIndexEntry,
     SkillInlineFile, SkillInstallRequest, SkillInstallResult, SkillMoveRequest, SkillReadRequest,
     SkillReadResult, SkillScope, SkillScopeFilter, SkillScopeRetargetRequest,
-    SkillScopeRetargetResult, SkillWriteRequest,
+    SkillScopeRetargetResult, SkillSearchRequest, SkillSearchResult, SkillWriteRequest,
 };
 use tt_ports::repositories::skill_repository::SkillRepository;
 
@@ -26,10 +26,6 @@ pub struct SkillService {
 }
 
 impl SkillService {
-    pub(crate) fn file_repository(&self) -> Arc<dyn SkillRepository> {
-        self.repository.clone()
-    }
-
     #[cfg(any(test, feature = "test-support"))]
     pub fn new(repository: Arc<dyn SkillRepository>) -> Self {
         Self {
@@ -96,11 +92,31 @@ impl SkillService {
         Ok(self.repository.read_skill_file(request).await?)
     }
 
+    /// 读取已安装 skill 包内脚本文件的源码文本（供 skill.run_script 引擎执行）。
+    pub async fn read_skill_script(
+        &self,
+        scope: SkillScope,
+        name: &str,
+        relative_path: &str,
+    ) -> Result<String, ApplicationError> {
+        Ok(self
+            .repository
+            .read_skill_script(scope, name, relative_path)
+            .await?)
+    }
+
     pub async fn write_skill_file(
         &self,
         request: SkillWriteRequest,
     ) -> Result<SkillReadResult, ApplicationError> {
         Ok(self.repository.write_skill_file(request).await?)
+    }
+
+    pub async fn search_skill_files(
+        &self,
+        request: SkillSearchRequest,
+    ) -> Result<SkillSearchResult, ApplicationError> {
+        Ok(self.repository.search_skill_files(request).await?)
     }
 
     pub async fn export_skill(
@@ -138,16 +154,9 @@ impl SkillService {
         scope_order: &[SkillScope],
         policy: &AgentSkillPolicy,
     ) -> Result<Vec<SkillIndexEntry>, ApplicationError> {
-        let mut skills = self.repository.list_skills(SkillScopeFilter::All).await?;
-        if scope_order.contains(&SkillScope::Builtin) {
-            skills.extend(
-                self.repository
-                    .list_skills(SkillScopeFilter::Builtin)
-                    .await?,
-            );
-        }
+        let installed = self.repository.list_skills(SkillScopeFilter::All).await?;
         let mut by_scope = BTreeMap::new();
-        for skill in skills {
+        for skill in installed {
             by_scope.insert((skill.scope.stable_key(), skill.name.clone()), skill);
         }
 
@@ -297,11 +306,7 @@ impl ExternalImportDownloader for UnavailableExternalImportDownloader {
         ))
     }
 
-    async fn fetch_to_file(
-        &self,
-        _url: Url,
-        _path: &std::path::Path,
-    ) -> Result<crate::services::external_import_service::DownloadedFile, DomainError> {
+    async fn fetch_to_file(&self, _url: Url, _path: &std::path::Path) -> Result<(), DomainError> {
         Err(DomainError::InternalError(
             "Skill remote import downloader is not configured".to_string(),
         ))
@@ -318,13 +323,14 @@ mod tests {
     use chrono::Utc;
 
     use super::*;
-    use crate::services::external_import_service::{DownloadedBytes, DownloadedFile};
+    use crate::services::external_import_service::DownloadedBytes;
     use tt_domain::errors::DomainError;
     use tt_domain::models::agent::profile::AgentSkillPolicy;
     use tt_domain::models::skill::{
         SkillExportResult, SkillImportInput, SkillImportPreview, SkillInstallRequest,
         SkillMoveRequest, SkillReadRequest, SkillReadResult, SkillScopeRetargetRequest,
-        SkillScopeRetargetResult, SkillSourceRef, SkillWriteRequest,
+        SkillScopeRetargetResult, SkillSearchRequest, SkillSearchResult, SkillSourceRef,
+        SkillWriteRequest,
     };
     use tt_ports::repositories::skill_repository::SkillRepository;
 
@@ -360,32 +366,6 @@ mod tests {
 
     #[async_trait]
     impl SkillRepository for FakeSkillRepository {
-        async fn read_skill_bytes(
-            &self,
-            _: &SkillScope,
-            _: &str,
-            _: &tt_domain::models::agent::WorkspacePath,
-            _: usize,
-        ) -> Result<Vec<u8>, DomainError> {
-            unreachable!("resolver tests do not read files")
-        }
-        async fn skill_metadata(
-            &self,
-            _: &SkillScope,
-            _: &str,
-            _: Option<&tt_domain::models::agent::WorkspacePath>,
-        ) -> Result<tt_ports::workspace_fs::WorkspaceMetadata, DomainError> {
-            unreachable!("resolver tests do not read files")
-        }
-        async fn read_skill_dir(
-            &self,
-            _: &SkillScope,
-            _: &str,
-            _: Option<&tt_domain::models::agent::WorkspacePath>,
-            _: usize,
-        ) -> Result<Vec<tt_ports::workspace_fs::WorkspaceDirectoryEntry>, DomainError> {
-            unreachable!("resolver tests do not read files")
-        }
         async fn list_skills(
             &self,
             scope_filter: SkillScopeFilter,
@@ -432,6 +412,15 @@ mod tests {
             unreachable!("not needed for resolver tests")
         }
 
+        async fn read_skill_script(
+            &self,
+            _scope: SkillScope,
+            _name: &str,
+            _relative_path: &str,
+        ) -> Result<String, DomainError> {
+            unreachable!("not needed for resolver tests")
+        }
+
         async fn read_skill_file(
             &self,
             _request: SkillReadRequest,
@@ -443,6 +432,13 @@ mod tests {
             &self,
             _request: SkillWriteRequest,
         ) -> Result<SkillReadResult, DomainError> {
+            unreachable!("not needed for resolver tests")
+        }
+
+        async fn search_skill_files(
+            &self,
+            _request: SkillSearchRequest,
+        ) -> Result<SkillSearchResult, DomainError> {
             unreachable!("not needed for resolver tests")
         }
 
@@ -536,11 +532,7 @@ mod tests {
             })
         }
 
-        async fn fetch_to_file(
-            &self,
-            _url: Url,
-            _path: &Path,
-        ) -> Result<DownloadedFile, DomainError> {
+        async fn fetch_to_file(&self, _url: Url, _path: &Path) -> Result<(), DomainError> {
             unimplemented!("not used by these tests")
         }
     }
@@ -549,6 +541,8 @@ mod tests {
         AgentSkillPolicy {
             visible: visible.into_iter().map(str::to_string).collect(),
             deny: deny.into_iter().map(str::to_string).collect(),
+            max_read_chars_per_call: 1000,
+            max_read_chars_per_run: 1000,
         }
     }
 

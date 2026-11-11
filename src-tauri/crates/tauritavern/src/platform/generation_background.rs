@@ -27,8 +27,7 @@ pub(crate) fn runtime(_app_handle: &AppHandle) -> Option<Arc<dyn GenerationBackg
         )))
     }
 
-    // OHOS has no native generation-background adapter yet.
-    #[cfg(any(desktop, target_env = "ohos"))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     None
 }
 

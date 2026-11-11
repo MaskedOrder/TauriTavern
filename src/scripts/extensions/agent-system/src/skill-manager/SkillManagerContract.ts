@@ -132,7 +132,8 @@ export type SkillManagerSnapshot = {
 };
 
 export type SkillDownloadResult = {
-    delivered: boolean;
+    mode: string;
+    completed?: boolean;
 };
 
 export type SkillManagerDeps = {

@@ -2,8 +2,7 @@ use tauri::WebviewWindow;
 
 /// Applies the iOS WKWebView host policy required by TauriTavern's browser contract.
 pub fn configure_main_wkwebview(window: &WebviewWindow) -> tauri::Result<()> {
-    let host_window = window.clone();
-    window.with_webview(move |webview| unsafe {
+    window.with_webview(|webview| unsafe {
         use objc2::runtime::AnyObject;
 
         let wkwebview_ptr = webview.inner();
@@ -15,10 +14,7 @@ pub fn configure_main_wkwebview(window: &WebviewWindow) -> tauri::Result<()> {
         let wkwebview = &*wkwebview_ptr.cast::<AnyObject>();
         super::apple_webview_refresh_rate::enable_native_refresh_rate(wkwebview);
         disable_content_inset_adjustment(wkwebview);
-        crate::platform::ios_window_layout::install(
-            &*wkwebview_ptr.cast::<objc2_ui_kit::UIView>(),
-            host_window,
-        );
+        configure_element_fullscreen(wkwebview);
         super::apple_webview_js_dialogs::install_js_dialog_ui_delegate(wkwebview);
     })
 }
@@ -36,4 +32,18 @@ unsafe fn disable_content_inset_adjustment(wkwebview: &objc2::runtime::AnyObject
     scroll_view.setContentInset(zero_insets);
     scroll_view.setScrollIndicatorInsets(zero_insets);
     scroll_view.setAutomaticallyAdjustsScrollIndicatorInsets(false);
+}
+
+unsafe fn configure_element_fullscreen(wkwebview: &objc2::runtime::AnyObject) {
+    if !objc2::available!(ios = 16.0) {
+        // Element Fullscreen is intentionally disabled on limited-support iOS 15.
+        return;
+    }
+
+    use objc2::rc::Retained;
+    use objc2::runtime::AnyObject;
+
+    let configuration: Retained<AnyObject> = objc2::msg_send![wkwebview, configuration];
+    let preferences: Retained<AnyObject> = objc2::msg_send![&*configuration, preferences];
+    let _: () = objc2::msg_send![&*preferences, setElementFullscreenEnabled: true];
 }

@@ -45,7 +45,6 @@ fn skill_scope_order_uses_profile_preset_then_profile_then_character() {
         mode: AgentPresetBindingMode::Ref,
         ref_: Some(preset.clone()),
         required: false,
-        reasoning_effort: None,
     });
     let refs = AgentRunSkillScopeRefs {
         preset: None,
@@ -78,7 +77,6 @@ fn resolve_run_skill_scope_refs_rejects_mismatched_character() {
         mode: AgentPresetBindingMode::CurrentPromptSnapshot,
         ref_: None,
         required: false,
-        reasoning_effort: None,
     });
     let dto = AgentStartRunDto {
         chat_ref: AgentChatRef::Character {
@@ -93,12 +91,13 @@ fn resolve_run_skill_scope_refs_rejects_mismatched_character() {
         frozen_run_input_snapshot: None,
         generation_intent: None,
         skill_scope_refs: AgentSkillScopeRefsDto {
+            preset: None,
             character_id: Some("Other".to_string()),
         },
         options: AgentStartRunOptionsDto::default(),
     };
 
-    let error = resolve_run_skill_scope_refs(&dto, &profile, &json!({})).unwrap_err();
+    let error = resolve_run_skill_scope_refs(&dto, &profile).unwrap_err();
 
     assert!(
         error
@@ -161,11 +160,16 @@ fn resolved_profile(preset: AgentPresetBinding) -> ResolvedAgentProfile {
             allow: Vec::new(),
             deny: Vec::new(),
             tool_descriptions: Default::default(),
-            external_result_inline_char_limit: 50_000,
+            max_rounds: 1,
+            max_calls_per_run: 1,
+            mcp_result_inline_char_limit: 50_000,
+            max_calls_per_tool: Default::default(),
         },
         skills: AgentSkillPolicy {
             visible: vec!["*".to_string()],
             deny: Vec::new(),
+            max_read_chars_per_call: 1000,
+            max_read_chars_per_run: 1000,
         },
         workspace: AgentWorkspacePolicy {
             visible_roots: vec!["output".to_string()],
@@ -176,7 +180,7 @@ fn resolved_profile(preset: AgentPresetBinding) -> ResolvedAgentProfile {
             beta: true,
             nodes: Vec::new(),
         },
-        output: Some(ResolvedAgentOutputPolicy {
+        output: ResolvedAgentOutputPolicy {
             artifacts: vec![ArtifactSpec {
                 id: "main".to_string(),
                 path: "output/main.md".to_string(),
@@ -187,7 +191,7 @@ fn resolved_profile(preset: AgentPresetBinding) -> ResolvedAgentProfile {
             }],
             message_body_artifact_id: "main".to_string(),
             message_body_path: "output/main.md".to_string(),
-        }),
+        },
         source_trace: AgentProfileSourceTrace {
             profile_source: "test".to_string(),
         },

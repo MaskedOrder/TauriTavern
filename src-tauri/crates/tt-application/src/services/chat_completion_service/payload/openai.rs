@@ -4,12 +4,12 @@ use crate::errors::ApplicationError;
 
 use super::content_parts::{
     AudioInputFormatSet, AudioRewriteFallbackPolicy, reject_media_for_text_only_provider,
-    rewrite_audio_url_parts_to_input_audio,
+    reject_video_for_provider, rewrite_audio_url_parts_to_input_audio,
 };
 use super::openai_reasoning::{
     normalize_openai_reasoning_effort, should_forward_openai_reasoning_effort,
 };
-use super::shared::{insert_if_present, json_schema_fields, message_content_to_text};
+use super::shared::{insert_if_present, message_content_to_text};
 
 const TEXT_COMPLETION_MODELS: &[&str] = &[
     "gpt-3.5-turbo-instruct",
@@ -179,9 +179,7 @@ fn build_chat_completion_payload(
         );
     }
 
-    if (source == "custom"
-        || (source == "pollinations"
-            && payload.get("pollinations_endpoint").and_then(Value::as_str) != Some("anonymous")))
+    if source == "custom"
         && let Some(reasoning_effort) = payload.get("reasoning_effort")
     {
         request.insert("reasoning_effort".to_string(), reasoning_effort.clone());
@@ -232,15 +230,14 @@ fn build_chat_completion_payload(
             AudioInputFormatSet::OpenAi,
             AudioRewriteFallbackPolicy::Reject,
         )?;
+        reject_video_for_provider("OpenAI Chat Completions", request.get("messages"))?;
     }
 
     Ok(request)
 }
 
 fn should_forward_openai_verbosity(source: &str, model: &str) -> bool {
-    source == "openrouter"
-        || (matches!(source, "openai" | "custom")
-            && model.trim().to_ascii_lowercase().starts_with("gpt-5"))
+    matches!(source, "openai" | "custom") && model.trim().to_ascii_lowercase().starts_with("gpt-5")
 }
 
 fn map_chat_logprobs(request: &mut Map<String, Value>, payload: &Map<String, Value>) {
@@ -293,13 +290,38 @@ fn resolve_response_format(payload: &Map<String, Value>) -> Option<Value> {
         .get("response_format")
         .cloned()
         .filter(|value| !value.is_null())
-        .or_else(|| {
-            let schema = json_schema_fields(payload)?;
-            Some(serde_json::json!({
-                "type": "json_schema",
-                "json_schema": schema,
-            }))
-        })
+        .or_else(|| build_response_format_from_json_schema(payload))
+}
+
+fn build_response_format_from_json_schema(payload: &Map<String, Value>) -> Option<Value> {
+    let json_schema = payload.get("json_schema")?.as_object()?;
+    let schema_value = json_schema.get("value")?.clone();
+    if schema_value.is_null() {
+        return None;
+    }
+
+    let mut json_schema_object = Map::new();
+    json_schema_object.insert(
+        "name".to_string(),
+        json_schema
+            .get("name")
+            .cloned()
+            .unwrap_or_else(|| Value::String("response".to_string())),
+    );
+    json_schema_object.insert(
+        "strict".to_string(),
+        json_schema
+            .get("strict")
+            .cloned()
+            .unwrap_or(Value::Bool(true)),
+    );
+    json_schema_object.insert("schema".to_string(), schema_value);
+
+    let mut response_format = Map::new();
+    response_format.insert("type".to_string(), Value::String("json_schema".to_string()));
+    response_format.insert("json_schema".to_string(), Value::Object(json_schema_object));
+
+    Some(Value::Object(response_format))
 }
 
 fn convert_text_completion_prompt(messages: &Value) -> Result<Option<String>, ApplicationError> {
@@ -435,12 +457,13 @@ mod tests {
     }
 
     #[test]
-    fn non_custom_sources_do_not_forward_reasoning_effort() {
+    fn non_custom_sources_do_not_forward_reasoning_effort_or_verbosity() {
         let payload = json!({
             "chat_completion_source": "openrouter",
             "model": "gpt-5",
             "messages": [{"role": "user", "content": "hello"}],
-            "reasoning_effort": "high"
+            "reasoning_effort": "high",
+            "verbosity": "high"
         })
         .as_object()
         .cloned()
@@ -449,6 +472,7 @@ mod tests {
         let (_endpoint, upstream) = build(payload).expect("build should succeed");
         let body = upstream.as_object().expect("payload must be object");
         assert!(body.get("reasoning_effort").is_none());
+        assert!(body.get("verbosity").is_none());
     }
 
     #[test]
@@ -622,5 +646,37 @@ mod tests {
                 .to_string()
                 .contains("unsupported audio data URL MIME type")
         );
+    }
+
+    #[test]
+    fn openai_chat_rejects_video_parts() {
+        for content in [
+            json!([
+                { "type": "video_url", "video_url": { "url": "data:video/mp4;base64,AAAA" } }
+            ]),
+            json!([
+                { "type": "video_url", "video_url": { "url": "https://example.test/video.mp4" } }
+            ]),
+            json!([
+                { "inlineData": { "mimeType": "video/mp4", "data": "AAAA" } }
+            ]),
+            json!({ "type": "video_url", "video_url": { "url": "data:video/mp4;base64,AAAA" } }),
+        ] {
+            let payload = json!({
+                "chat_completion_source": "openai",
+                "model": "gpt-4.1-mini",
+                "messages": [{
+                    "role": "user",
+                    "content": content
+                }]
+            })
+            .as_object()
+            .cloned()
+            .expect("payload must be object");
+
+            let error = build(payload).expect_err("video should fail fast");
+
+            assert!(error.to_string().contains("cannot preserve video input"));
+        }
     }
 }

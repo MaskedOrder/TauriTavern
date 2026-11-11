@@ -26,10 +26,16 @@ pub(crate) fn workspace_id_for_stable_chat_id(
 }
 
 pub(crate) fn validate_stable_chat_id(raw: &str) -> Result<String, ApplicationError> {
-    if raw.is_empty() {
+    let value = raw.trim();
+    if value.is_empty() {
         return Err(ApplicationError::ValidationError(
             "agent.stable_chat_id_required: stableChatId is required".to_string(),
         ));
     }
-    Ok(raw.to_string())
+    if value.len() > 512 {
+        return Err(ApplicationError::ValidationError(
+            "agent.invalid_stable_chat_id: stableChatId is too long".to_string(),
+        ));
+    }
+    Ok(value.to_string())
 }

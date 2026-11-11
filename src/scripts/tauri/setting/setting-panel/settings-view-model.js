@@ -1,6 +1,7 @@
 // @ts-check
 
-import { hostPlatform, isDesktopHost } from '../../../util/host-identity.js';
+import { isMobile } from '../../../RossAscends-mods.js';
+import { isAndroidRuntime, isIosRuntime } from '../../../util/mobile-runtime.js';
 import {
     getChatBackupStorageStats,
     getRuntimePaths,
@@ -10,14 +11,21 @@ import { getActiveIosPolicyCapabilities } from '../../../tauritavern/ios-policy.
 import { isOledBackgroundEnabled } from '../oled-background.js';
 import { createDataRootState, createTauriTavernSettingsState } from './settings-state.js';
 
+export function isWindowsPlatform() {
+    return typeof navigator !== 'undefined'
+        && /windows/i.test(String(navigator.userAgent || ''));
+}
+
 export function resolveTauriTavernSettingsCapabilities() {
     const iosCaps = getActiveIosPolicyCapabilities();
-    const supportsDataRootSelection = isDesktopHost();
+    // Data directory selection is a desktop-only feature. Do not gate this on Bowser's `isMobile()`,
+    // because iPadOS may present a desktop-like user agent (e.g. platform "MacIntel").
+    const supportsDataRootSelection = !isAndroidRuntime() && !isIosRuntime();
 
     return {
         requestProxyAllowed: iosCaps?.network?.request_proxy !== false,
         lanSyncAllowed: iosCaps?.sync?.lan !== false,
-        supportsCloseToTrayOnClose: hostPlatform() === 'windows',
+        supportsCloseToTrayOnClose: isWindowsPlatform() && !isMobile(),
         supportsDataRootSelection,
     };
 }

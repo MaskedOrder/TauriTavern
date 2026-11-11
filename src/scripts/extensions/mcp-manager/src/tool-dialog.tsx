@@ -28,7 +28,7 @@ type ToolDescriptionDialogHandle = {
  * overrides survive a description edit; an emptied description drops the whole
  * entry once nothing else remains.
  */
-function withDescription(
+export function withDescription(
     override: TauriTavernToolDescriptionOverride | undefined,
     description: string,
 ): TauriTavernToolDescriptionOverride | null {
@@ -48,7 +48,7 @@ type ToolDescriptionDialogProps = ToolDescriptionDialogInput & {
     ref: Ref<ToolDescriptionDialogHandle>;
 };
 
-function ToolDescriptionDialog({
+export function ToolDescriptionDialog({
     tool,
     override,
     save,
@@ -99,10 +99,9 @@ function ToolDescriptionDialog({
                     rows={5}
                     value={draft}
                     disabled={saving}
-                    aria-describedby="tt-mcp-tool-custom-description-hint"
                     onChange={event => setDraft(event.currentTarget.value)}
                 />
-                <small id="tt-mcp-tool-custom-description-hint">{tr('customDescriptionHint')}</small>
+                <small>{tr('customDescriptionHint')}</small>
             </div>
 
             {error && <p className="tt-mcp-error" role="alert">{error}</p>}

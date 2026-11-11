@@ -214,7 +214,11 @@ const Def = {
             // Macro args allow nested macros
             enter(Tokens.Macro.Start, modes.macro_def),
 
-            // Pipes remain literal arguments until the filter syntax is implemented.
+            // We allow escaped pipes to not start output modifiers. We need to capture this first, before the pipe
+            using(Tokens.Filter.EscapedPipe),
+
+            // If at any place during args writing there is a pipe, we lex it as an output identifier, and then continue with lex its args
+            enter(Tokens.Filter.Pipe, modes.macro_filter_modifer),
 
             using(Tokens.Args.DoubleColon),
             using(Tokens.Args.Colon),

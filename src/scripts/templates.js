@@ -1,7 +1,6 @@
-import { hostPlatform } from './util/host-identity.js';
 import { DOMPurify, Handlebars } from '../lib.js';
 import { applyLocale } from './i18n.js';
-import { invoke } from '../tauri-bridge.js';
+import { isTauriEnv, invoke } from '../tauri-bridge.js';
 
 /**
  * @type {Map<string, function>}
@@ -79,22 +78,48 @@ function parseExtensionTemplatePath(templatePath) {
 }
 
 /**
- * Loads bundled templates through the host, and full-path templates as resources.
+ * Returns true when running inside a Tauri Android WebView.
+ * Extension template bridge reads are only required on Android assets.
+ * @returns {boolean}
+ */
+function isAndroidTauriRuntime() {
+    if (!isTauriEnv || typeof navigator === 'undefined') {
+        return false;
+    }
+
+    return /android/i.test(navigator.userAgent || '');
+}
+
+/**
+ * Loads a template content, using Tauri resource reading on Tauri environments
+ * and fetch on regular web environments.
  * @param {string} templateId Template ID (e.g., 'emptyBlock')
  * @param {boolean} fullPath Whether templateId is a full path
  * @returns {Promise<string>} Template HTML content
  */
 async function getTemplateContent(templateId, fullPath) {
-    if (!fullPath) {
-        return invoke('read_frontend_template', { name: `${templateId}.html` });
+    // On Tauri, use invoke to read from bundled resources (handles Android asset:// paths)
+    if (isTauriEnv && invoke) {
+        if (!fullPath) {
+            const fileName = `${templateId}.html`;
+            return invoke('read_frontend_template', { name: fileName });
+        }
+
+        const extensionTemplate = parseExtensionTemplatePath(templateId);
+        if (extensionTemplate && isAndroidTauriRuntime()) {
+            try {
+                return await invoke('read_frontend_extension_template', extensionTemplate);
+            } catch (error) {
+                console.warn('Failed to read extension template via Tauri bridge, fallback to fetch:', templateId, error);
+            }
+        }
     }
 
-    const extensionTemplate = parseExtensionTemplatePath(templateId);
-    if (extensionTemplate && hostPlatform() === 'android') {
-        return invoke('read_frontend_extension_template', extensionTemplate);
-    }
-
-    return getUrlAsync(normalizeTemplateFetchPath(templateId));
+    // Fallback: use fetch for non-Tauri or full-path templates
+    const pathToTemplate = fullPath
+        ? normalizeTemplateFetchPath(templateId)
+        : `/scripts/templates/${templateId}.html`;
+    return getUrlAsync(pathToTemplate);
 }
 
 /**

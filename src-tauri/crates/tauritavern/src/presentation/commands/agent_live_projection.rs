@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
 use tt_application::dto::agent_dto::{
-    AgentRunLiveFieldDto, AgentRunLiveResponseDto, AgentRunLiveToolCallDto, AgentRunLiveUpdateDto,
+    AgentRunLiveFieldDto, AgentRunLiveReasoningDto, AgentRunLiveToolCallDto, AgentRunLiveUpdateDto,
 };
 use tt_application::services::agent_runtime_service::{
-    AgentRunLiveCall, AgentRunLiveCallKey, AgentRunLiveProjection, AgentRunLiveResponse,
+    AgentRunLiveCall, AgentRunLiveCallKey, AgentRunLiveProjection, AgentRunLiveReasoning,
     ModelAttemptGeneration, ToolCallProjection,
 };
 use tt_domain::text_metrics::TextMetrics;
@@ -14,23 +14,21 @@ use crate::presentation::errors::CommandError;
 #[derive(Default)]
 pub(super) struct AgentRunLivePresenter {
     calls: BTreeMap<AgentRunLiveCallKey, PresentedCall>,
-    responses: BTreeMap<String, PresentedResponse>,
+    reasoning: BTreeMap<String, PresentedReasoning>,
 }
 
-struct PresentedResponse {
+struct PresentedReasoning {
     generation: ModelAttemptGeneration,
     text_bytes: usize,
-    reasoning_bytes: usize,
     tool_count: usize,
 }
 
-impl From<&AgentRunLiveResponse> for PresentedResponse {
-    fn from(response: &AgentRunLiveResponse) -> Self {
+impl From<&AgentRunLiveReasoning> for PresentedReasoning {
+    fn from(reasoning: &AgentRunLiveReasoning) -> Self {
         Self {
-            generation: response.generation,
-            text_bytes: response.text.len(),
-            reasoning_bytes: response.reasoning.len(),
-            tool_count: response.tool_ids.len(),
+            generation: reasoning.generation,
+            text_bytes: reasoning.text.len(),
+            tool_count: reasoning.tool_ids.len(),
         }
     }
 }
@@ -57,28 +55,24 @@ impl AgentRunLivePresenter {
         &mut self,
         projection: &AgentRunLiveProjection,
     ) -> AgentRunLiveUpdateDto {
-        self.calls = projection
-            .calls
-            .iter()
-            .map(|(key, call)| (key.clone(), PresentedCall::from(call)))
-            .collect();
-        self.responses = projection
-            .responses
-            .iter()
-            .map(|(id, response)| (id.clone(), PresentedResponse::from(response)))
-            .collect();
-        AgentRunLiveUpdateDto::Snapshot {
-            calls: projection
-                .calls
-                .iter()
-                .map(|(key, call)| to_call_dto(key, call))
-                .collect(),
-            responses: projection
-                .responses
-                .iter()
-                .map(|(id, response)| to_response_dto(id, response))
-                .collect(),
+        let mut calls = Vec::with_capacity(projection.calls.len());
+        let mut presented = BTreeMap::new();
+        for (key, call) in &projection.calls {
+            calls.push(to_call_dto(key, call));
+            presented.insert(key.clone(), PresentedCall::from(call));
         }
+        self.calls = presented;
+        let reasoning = projection
+            .reasoning
+            .iter()
+            .map(|(id, reasoning)| to_reasoning_dto(id, reasoning))
+            .collect();
+        self.reasoning = projection
+            .reasoning
+            .iter()
+            .map(|(id, reasoning)| (id.clone(), PresentedReasoning::from(reasoning)))
+            .collect();
+        AgentRunLiveUpdateDto::Snapshot { calls, reasoning }
     }
 
     pub(super) fn updates(
@@ -95,6 +89,7 @@ impl AgentRunLivePresenter {
             })
             .collect::<Vec<_>>();
         let mut presented = BTreeMap::new();
+
         for (key, call) in &projection.calls {
             match self.calls.get(key) {
                 Some(previous) if previous.generation == call.generation => {
@@ -103,7 +98,7 @@ impl AgentRunLivePresenter {
                         key,
                         &previous.fields,
                         &call.projection,
-                    )?;
+                    )?
                 }
                 _ => updates.push(AgentRunLiveUpdateDto::Replace {
                     call: to_call_dto(key, call),
@@ -111,65 +106,61 @@ impl AgentRunLivePresenter {
             }
             presented.insert(key.clone(), PresentedCall::from(call));
         }
-        self.calls = presented;
 
+        self.calls = presented;
         for id in self
-            .responses
+            .reasoning
             .keys()
-            .filter(|id| !projection.responses.contains_key(*id))
+            .filter(|id| !projection.reasoning.contains_key(*id))
         {
-            updates.push(AgentRunLiveUpdateDto::ResponseRemove {
+            updates.push(AgentRunLiveUpdateDto::ReasoningRemove {
                 invocation_id: id.clone(),
             });
         }
-        for (id, response) in &projection.responses {
-            match self.responses.get(id) {
-                Some(previous) if previous.generation == response.generation => {
-                    let suffixes = response
-                        .text
-                        .get(previous.text_bytes..)
-                        .zip(response.reasoning.get(previous.reasoning_bytes..))
-                        .zip(response.tool_ids.get(previous.tool_count..));
-                    let Some(((text, reasoning), tool_ids)) = suffixes else {
+        for (id, reasoning) in &projection.reasoning {
+            match self.reasoning.get(id) {
+                Some(previous) if previous.generation == reasoning.generation => {
+                    let Some(text) = reasoning.text.get(previous.text_bytes..) else {
                         return Err(CommandError::InternalServerError(format!(
-                            "agent.live_projection_cursor_invalid: response shrank for invocation `{id}`"
+                            "agent.live_projection_cursor_invalid: reasoning shrank for invocation `{id}`"
                         )));
                     };
-                    if !text.is_empty() || !reasoning.is_empty() || !tool_ids.is_empty() {
-                        updates.push(AgentRunLiveUpdateDto::ResponseAppend {
+                    let Some(tool_ids) = reasoning.tool_ids.get(previous.tool_count..) else {
+                        return Err(CommandError::InternalServerError(format!(
+                            "agent.live_projection_cursor_invalid: reasoning tool IDs shrank for invocation `{id}`"
+                        )));
+                    };
+                    if !text.is_empty() || !tool_ids.is_empty() {
+                        updates.push(AgentRunLiveUpdateDto::ReasoningAppend {
                             invocation_id: id.clone(),
                             text: text.to_string(),
-                            reasoning: reasoning.to_string(),
                             tool_ids: tool_ids.to_vec(),
                         });
                     }
                 }
-                _ => updates.push(AgentRunLiveUpdateDto::ResponseReplace {
-                    response: to_response_dto(id, response),
+                _ => updates.push(AgentRunLiveUpdateDto::ReasoningReplace {
+                    reasoning: to_reasoning_dto(id, reasoning),
                 }),
             }
         }
-        self.responses = projection
-            .responses
+        self.reasoning = projection
+            .reasoning
             .iter()
-            .map(|(id, response)| (id.clone(), PresentedResponse::from(response)))
+            .map(|(id, reasoning)| (id.clone(), PresentedReasoning::from(reasoning)))
             .collect();
         Ok(updates)
     }
 }
 
-fn to_response_dto(
+fn to_reasoning_dto(
     invocation_id: &str,
-    response: &AgentRunLiveResponse,
-) -> AgentRunLiveResponseDto {
-    AgentRunLiveResponseDto {
+    reasoning: &AgentRunLiveReasoning,
+) -> AgentRunLiveReasoningDto {
+    AgentRunLiveReasoningDto {
         invocation_id: invocation_id.to_string(),
-        invocation_exit_policy: response.invocation_exit_policy,
-        round: response.generation.round,
-        attempt: response.generation.attempt,
-        text: response.text.clone(),
-        reasoning: response.reasoning.clone(),
-        tool_ids: response.tool_ids.clone(),
+        invocation_exit_policy: reasoning.invocation_exit_policy,
+        text: reasoning.text.clone(),
+        tool_ids: reasoning.tool_ids.clone(),
     }
 }
 
@@ -315,80 +306,70 @@ mod tests {
     use super::*;
 
     #[test]
-    fn response_cursors_survive_unicode_and_coalesced_retry() {
+    fn reasoning_cursors_survive_unicode_and_coalesced_retry() {
         let mut projection = AgentRunLiveProjection::default();
-        projection.responses.insert(
+        projection.reasoning.insert(
             "inv_root".to_string(),
-            AgentRunLiveResponse {
+            AgentRunLiveReasoning {
                 generation: ModelAttemptGeneration {
                     round: 1,
                     attempt: 1,
                 },
                 invocation_exit_policy: AgentInvocationExitPolicy::RunFinishAllowed,
-                text: "正文".to_string(),
-                reasoning: "思考".to_string(),
+                text: "思考".to_string(),
                 tool_ids: Vec::new(),
             },
         );
         let mut presenter = AgentRunLivePresenter::default();
         let snapshot = serde_json::to_value(presenter.snapshot(&projection)).unwrap();
         assert_eq!(
-            snapshot["responses"],
+            snapshot["reasoning"],
             json!([{
-                "invocationId": "inv_root", "invocationExitPolicy": "run_finish_allowed", "round": 1, "attempt": 1, "text": "正文", "reasoning": "思考", "toolIds": []
+                "invocationId": "inv_root", "invocationExitPolicy": "run_finish_allowed", "text": "思考", "toolIds": []
             }])
         );
         projection
-            .responses
+            .reasoning
             .get_mut("inv_root")
             .unwrap()
             .text
             .push_str("一下😀");
-        projection
-            .responses
-            .get_mut("inv_root")
-            .unwrap()
-            .reasoning
-            .push_str("再想😀");
         assert_eq!(
             presenter.updates(&projection).unwrap(),
-            vec![AgentRunLiveUpdateDto::ResponseAppend {
+            vec![AgentRunLiveUpdateDto::ReasoningAppend {
                 invocation_id: "inv_root".to_string(),
                 text: "一下😀".to_string(),
-                reasoning: "再想😀".to_string(),
                 tool_ids: Vec::new(),
             }]
         );
         projection
-            .responses
+            .reasoning
             .get_mut("inv_root")
             .unwrap()
             .tool_ids
             .push(ToolId::builtin("workspace.read_file").unwrap());
         assert_eq!(
             presenter.updates(&projection).unwrap(),
-            vec![AgentRunLiveUpdateDto::ResponseAppend {
+            vec![AgentRunLiveUpdateDto::ReasoningAppend {
                 invocation_id: "inv_root".to_string(),
                 text: String::new(),
-                reasoning: String::new(),
                 tool_ids: vec![ToolId::builtin("workspace.read_file").unwrap()],
             }]
         );
         // watch may coalesce clear + retry: a new generation must replace, not append.
-        let response = projection.responses.get_mut("inv_root").unwrap();
-        response.generation.attempt = 2;
-        response.text = "retry".to_string();
-        response.reasoning.clear();
+        let reasoning = projection.reasoning.get_mut("inv_root").unwrap();
+        reasoning.generation.attempt = 2;
+        reasoning.text = "retry".to_string();
         assert_eq!(
             presenter.updates(&projection).unwrap(),
-            vec![AgentRunLiveUpdateDto::ResponseReplace {
-                response: to_response_dto("inv_root", &projection.responses["inv_root"]),
+            vec![AgentRunLiveUpdateDto::ReasoningReplace {
+                reasoning: to_reasoning_dto("inv_root", &projection.reasoning["inv_root"]),
             }]
         );
-        projection.responses.clear();
+        projection.reasoning.clear();
         assert_eq!(
             presenter.updates(&projection).unwrap(),
-            vec![AgentRunLiveUpdateDto::ResponseRemove {
+            vec![AgentRunLiveUpdateDto::ReasoningRemove {
                 invocation_id: "inv_root".to_string(),
             }]
         );
@@ -415,7 +396,7 @@ mod tests {
                     "content": "你",
                     "contentWords": 1
                 }],
-                "responses": []
+                "reasoning": []
             })
         );
 

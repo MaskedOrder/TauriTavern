@@ -6,6 +6,7 @@ use super::{
     MAX_WORLDINFO_TOTAL_READ_CHARS,
 };
 use crate::errors::ApplicationError;
+use crate::services::agent_tools::common::tool_error;
 use crate::services::agent_tools::dispatcher::AgentToolEffect;
 use tt_domain::models::agent::AgentToolResult;
 use tt_domain::models::tool::ToolInvocation;
@@ -109,7 +110,7 @@ pub(in crate::services::agent_tools) fn read_activated(
         Ok(request) => request,
         Err(message) => {
             return Ok((
-                AgentToolResult::error(call, "tool.invalid_arguments", &message),
+                tool_error(call, "tool.invalid_arguments", &message),
                 AgentToolEffect::None,
             ));
         }
@@ -117,7 +118,7 @@ pub(in crate::services::agent_tools) fn read_activated(
 
     let Some(batch) = prompt_snapshot.get("worldInfoActivation") else {
         return Ok((
-            AgentToolResult::error(
+            tool_error(
                 call,
                 "worldinfo.activation_unavailable",
                 "this run has no worldInfoActivation snapshot",
@@ -139,7 +140,7 @@ pub(in crate::services::agent_tools) fn read_activated(
         ReadActivatedRequest::Content(requests) => {
             match build_content_result(call, batch, &entries, &requests) {
                 Ok(result) => result,
-                Err((code, message)) => AgentToolResult::error(call, code, &message),
+                Err((code, message)) => tool_error(call, code, &message),
             }
         }
     };
@@ -306,19 +307,21 @@ fn build_index_result(
         .collect::<Vec<_>>();
     let content = render_index_content(entries);
 
-    let mut result = AgentToolResult::ok(
-        call,
+    AgentToolResult {
+        call_id: call.call_id.clone(),
+        tool_id: call.tool_id.clone(),
         content,
-        structured_value(WorldInfoIndexStructured {
+        structured: structured_value(WorldInfoIndexStructured {
             mode: "index",
             timestamp_ms: batch.get("timestampMs").and_then(Value::as_i64),
             trigger: batch.get("trigger").and_then(Value::as_str),
             total_entries: entries.len(),
             entries: entries.iter().map(index_entry).collect(),
         }),
-    );
-    result.resource_refs = resource_refs;
-    result
+        is_error: false,
+        error_code: None,
+        resource_refs,
+    }
 }
 
 fn build_content_result(
@@ -352,19 +355,21 @@ fn build_content_result(
         .collect::<Vec<_>>();
     let content = render_content_entries(&rendered);
 
-    let mut result = AgentToolResult::ok(
-        call,
+    Ok(AgentToolResult {
+        call_id: call.call_id.clone(),
+        tool_id: call.tool_id.clone(),
         content,
-        structured_value(WorldInfoContentStructured {
+        structured: structured_value(WorldInfoContentStructured {
             mode: "content",
             timestamp_ms: batch.get("timestampMs").and_then(Value::as_i64),
             trigger: batch.get("trigger").and_then(Value::as_str),
             total_entries: entries.len(),
             entries: rendered.iter().map(content_entry).collect(),
         }),
-    );
-    result.resource_refs = resource_refs;
-    Ok(result)
+        is_error: false,
+        error_code: None,
+        resource_refs,
+    })
 }
 
 fn render_entry(

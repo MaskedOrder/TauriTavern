@@ -134,8 +134,7 @@ export function createAgentSystemPanelPersistence(
     }
 
     function profileDraftHasUnsavedChanges(savedProfile: TauriTavernAgentProfileDefinition): boolean {
-        return prettyJson(normalizeProfileForSave(context.getSnapshot().draft))
-            !== prettyJson(normalizeProfileForSave(savedProfile));
+        return prettyJson(normalizeProfileForSave(context.getSnapshot().draft)) !== prettyJson(savedProfile);
     }
 
     async function saveProfile(): Promise<void> {
@@ -231,7 +230,7 @@ export function createAgentSystemPanelPersistence(
         const portableProfile = sanitizePortableAgentProfile(profile);
         const blob = new Blob([`${prettyJson(portableProfile)}\n`], { type: PROFILE_EXPORT_CONTENT_TYPE });
         const downloadResult = await deps.downloadBlob(blob, `${profile.id}.agent-profile.json`);
-        if (downloadResult.delivered) {
+        if (downloadResult?.mode !== 'ios-native-share' || downloadResult.completed === true) {
             deps.notifySuccess(deps.tr('exportedProfile', { id: profile.id }));
         }
     }

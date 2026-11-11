@@ -1,13 +1,18 @@
 // @ts-check
 
-import { isTopLevelDrawerOpen, subscribeDrawerState } from '../../../../scripts/drawers.js';
-
 import { PanelRuntimeKind } from '../../services/panel-runtime/panel-runtime-kinds.js';
 
 /**
  * @typedef {import('../../services/embedded-runtime/embedded-runtime-manager.js').createEmbeddedRuntimeManager} createEmbeddedRuntimeManager
  * @typedef {ReturnType<createEmbeddedRuntimeManager>} EmbeddedRuntimeManager
  */
+
+/**
+ * @param {HTMLElement} drawerContent
+ */
+function isDrawerOpen(drawerContent) {
+    return drawerContent.classList.contains('openDrawer') && !drawerContent.classList.contains('closedDrawer');
+}
 
 const LEFT_NAV_MAIN_API_BLOCKS = Object.freeze({
     koboldhorde: {
@@ -42,10 +47,10 @@ const LEFT_NAV_MAIN_API_BLOCKS = Object.freeze({
     },
 });
 
-// Keep controls read from outside this drawer connected in every profile.
+// Every profile: openai.js `onModelChange` runs from the never-parked #rm_api_block
+// and reads these controls' `max` back through the DOM, which yields NaN once parked.
 const LEFT_NAV_REQUIRED_ANCHORS = Object.freeze([
-    '#range_block_openai', // onModelChange reads max through the DOM; parking yields NaN.
-    '#openai_reasoning_effort_block', // The assistant reads data-source after APP_READY.
+    '#range_block_openai',
 ]);
 
 // `compat` only: keep these selectable while parked, for third-party scripts.
@@ -258,7 +263,7 @@ function registerDrawerParking(manager, { panelId, parkedSelector, pinnedSelecto
         kind: PanelRuntimeKind.DrawerContent,
         element: host,
         visibilityMode: 'manual',
-        initialVisible: isTopLevelDrawerOpen(host),
+        initialVisible: isDrawerOpen(host),
         hydrate,
         dehydrate,
     });
@@ -269,19 +274,21 @@ function registerDrawerParking(manager, { panelId, parkedSelector, pinnedSelecto
     };
     toggle.addEventListener('click', onToggleClickCapture, true);
 
-    const unsubscribeDrawer = subscribeDrawerState(host, () => {
-        const open = isTopLevelDrawerOpen(host);
+    const classObserver = new MutationObserver(() => {
+        const open = isDrawerOpen(host);
         manager.setVisible(slotId, open);
         if (open) {
             manager.reconcile();
         }
     });
 
+    classObserver.observe(host, { attributes: true, attributeFilter: ['class'] });
+
     return {
         drawerId: typeof drawer.id === 'string' ? drawer.id : '',
         slotId,
         dispose: () => {
-            unsubscribeDrawer();
+            classObserver.disconnect();
             toggle.removeEventListener('click', onToggleClickCapture, true);
         },
     };
@@ -310,12 +317,7 @@ export function installTopSettingsPanelParking({ manager }) {
             afterHydrate: () => syncLeftNavMainApiUi(),
         }),
         registerDrawerParking(manager, { panelId: 'AdvancedFormatting', parkedSelector: '.flex-container.spaceEvenly' }),
-        registerDrawerParking(manager, {
-            panelId: 'WorldInfo',
-            // compat parks only the entry list, which holds nearly all World Info DOM. The lorebook
-            // selects, pagination and editor buttons stay connected for the code that updates them.
-            parkedSelector: manager.profile === 'compat' ? '#world_popup_entries_list' : '#wi-holder',
-        }),
+        registerDrawerParking(manager, { panelId: 'WorldInfo', parkedSelector: '#wi-holder' }),
         registerDrawerParking(manager, { panelId: 'user-settings-block', parkedSelector: '#user-settings-block-content' }),
         registerDrawerParking(manager, { panelId: 'Backgrounds', parkedSelector: '#bg_tabs' }),
     ];

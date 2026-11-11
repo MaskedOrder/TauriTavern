@@ -1,12 +1,25 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetWorldInfoDto {
     pub name: String,
 }
 
-pub struct WorldInfoJsonDto {
-    pub bytes: Vec<u8>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetWorldInfosBatchDto {
+    pub names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetWorldInfosBatchItemDto {
+    pub name: String,
+    pub data: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetWorldInfosBatchResponseDto {
+    pub items: Vec<GetWorldInfosBatchItemDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,6 +32,12 @@ pub struct NormalizeWorldInfoNameDto {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NormalizeWorldInfoNameResponseDto {
     pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveWorldInfoDto {
+    pub name: String,
+    pub data: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

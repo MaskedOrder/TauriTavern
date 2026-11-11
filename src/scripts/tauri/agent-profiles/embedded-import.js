@@ -2,6 +2,7 @@
 
 import { t } from '../../i18n.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from '../../popup.js';
+import { SURFACE, applySurface } from '../../tauritavern/layout-kit.js';
 import { sanitizePortableAgentProfile } from '../../tauritavern/agent/agent-profile-portable.js';
 import { buildSkillImportReminderKey, hasSkillImportReminder, setSkillImportReminder } from '../agent-skills/reminders.js';
 
@@ -322,6 +323,7 @@ async function showImportPopup(previews, sourceLabel) {
         leftAlign: true,
     });
     popup.dlg.classList.add('tauritavern-agent-profile-import-popup');
+    applySurface(popup.dlg, SURFACE.FullscreenWindow);
 
     const result = await popup.show();
     if (result !== POPUP_RESULT.AFFIRMATIVE) {

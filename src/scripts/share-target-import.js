@@ -1,4 +1,6 @@
-import { convertFileSrc } from '../tauri-bridge.js';
+import { convertFileSrc, isTauriEnv } from '../tauri-bridge.js';
+
+const NATIVE_SHARE_BRIDGE_KEY = '__TAURITAVERN_NATIVE_SHARE__';
 
 function sanitizeFileName(fileName) {
     const fallback = 'shared-character.png';
@@ -15,31 +17,87 @@ function sanitizeFileName(fileName) {
     return sanitized.toLowerCase().endsWith('.png') ? sanitized : `${sanitized}.png`;
 }
 
+function getNativeShareBridge() {
+    if (typeof window === 'undefined') {
+        return null;
+    }
+
+    const bridge = window[NATIVE_SHARE_BRIDGE_KEY];
+    if (!bridge || typeof bridge.subscribe !== 'function') {
+        return null;
+    }
+
+    return bridge;
+}
+
+function normalizeHttpUrl(url) {
+    try {
+        const parsed = new URL(String(url || '').trim());
+        const protocol = parsed.protocol.toLowerCase();
+        if (protocol !== 'http:' && protocol !== 'https:') {
+            return null;
+        }
+        return parsed.toString();
+    } catch {
+        return null;
+    }
+}
+
 async function fileFromSharedPath(payload) {
-    const response = await fetch(convertFileSrc(payload.path, 'asset'));
+    const sourcePath = String(payload?.path || '').trim();
+    if (!sourcePath) {
+        return null;
+    }
+
+    if (typeof convertFileSrc !== 'function') {
+        throw new Error('Tauri convertFileSrc is unavailable');
+    }
+
+    const sourceUrl = convertFileSrc(sourcePath, 'asset');
+    const response = await fetch(sourceUrl);
     if (!response.ok) {
         throw new Error(`Failed to read shared PNG (HTTP ${response.status})`);
     }
 
     const blob = await response.blob();
-    return new File([blob], sanitizeFileName(payload.fileName), { type: payload.mimeType });
+    const fileName = sanitizeFileName(payload?.fileName);
+    const mimeType = String(payload?.mimeType || blob.type || 'image/png');
+    return new File([blob], fileName, { type: mimeType });
 }
 
-// The native share bridge delivers payloads it has already normalized.
 async function handleNativeSharePayload(payload, { importFromExternalUrl, processDroppedFiles }) {
-    switch (payload.kind) {
-        case 'url':
-            await importFromExternalUrl(payload.url);
+    const kind = String(payload?.kind || '').trim().toLowerCase();
+
+    if (kind === 'url') {
+        const url = normalizeHttpUrl(payload?.url);
+        if (!url) {
             return;
-        case 'png':
-            await processDroppedFiles([await fileFromSharedPath(payload)]);
+        }
+
+        await importFromExternalUrl(url);
+        return;
+    }
+
+    if (kind === 'png') {
+        const file = await fileFromSharedPath(payload);
+        if (!file) {
             return;
-        default:
-            throw new Error(`Unsupported native share payload: ${payload.kind}`);
+        }
+
+        await processDroppedFiles([file]);
     }
 }
 
 export function initializeShareTargetImport({ importFromExternalUrl, processDroppedFiles }) {
+    if (!isTauriEnv) {
+        return () => { /* noop */ };
+    }
+
+    const bridge = getNativeShareBridge();
+    if (!bridge) {
+        return () => { /* noop */ };
+    }
+
     let processingQueue = Promise.resolve();
     const enqueue = (payload) => {
         processingQueue = processingQueue
@@ -49,5 +107,10 @@ export function initializeShareTargetImport({ importFromExternalUrl, processDrop
             });
     };
 
-    return window.__TAURITAVERN_NATIVE_SHARE__.subscribe(enqueue);
+    const unsubscribe = bridge.subscribe(enqueue);
+    return () => {
+        if (typeof unsubscribe === 'function') {
+            unsubscribe();
+        }
+    };
 }

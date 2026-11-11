@@ -10,7 +10,7 @@ type SettingsSectionProps = {
 
 export function SettingsSection({ title, icon = '', children }: SettingsSectionProps) {
     return (
-        <section className="tt-settings-section" aria-label={title}>
+        <section className="tt-settings-section">
             <div className="tt-settings-section-title">
                 {icon && <i className={`fa-solid ${icon}`} aria-hidden="true"></i>}
                 <b>{title}</b>

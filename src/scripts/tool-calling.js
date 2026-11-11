@@ -591,23 +591,14 @@ export class ToolManager {
      * Apply a tool call delta to a target object.
      * @param {object} target The target object to apply the delta to
      * @param {object} delta The delta object to apply
-     * @param {boolean} [isToolMetadata=true] Whether this is a tool-call or function envelope, rather than argument data.
      */
-    static #applyToolCallDelta(target, delta, isToolMetadata = true) {
+    static #applyToolCallDelta(target, delta) {
         for (const key in delta) {
             if (!Object.prototype.hasOwnProperty.call(delta, key)) continue;
             if (key === '__proto__' || key === 'constructor') continue;
 
             const deltaValue = delta[key];
             const targetValue = target[key];
-
-            // Opaque provider metadata is a snapshot, matching the native stream accumulator.
-            if (isToolMetadata && key === 'extra_content') {
-                if (deltaValue !== null && deltaValue !== undefined) {
-                    target[key] = deltaValue;
-                }
-                continue;
-            }
 
             if (deltaValue === null || deltaValue === undefined) {
                 // Don't reset the value if it already exists
@@ -619,12 +610,7 @@ export class ToolManager {
             }
 
             if (typeof deltaValue === 'string') {
-                // Providers may repeat complete identities alongside incremental arguments.
-                if (isToolMetadata && (key === 'id' || key === 'name' || key === 'type')) {
-                    if (!targetValue) {
-                        target[key] = deltaValue;
-                    }
-                } else if (typeof targetValue === 'string') {
+                if (typeof targetValue === 'string') {
                     // Concatenate strings
                     target[key] = targetValue + deltaValue;
                 } else {
@@ -634,9 +620,8 @@ export class ToolManager {
                 if (typeof targetValue !== 'object' || targetValue === null || Array.isArray(targetValue)) {
                     target[key] = {};
                 }
-                // OpenAI function and Cohere tool_calls envelopes retain metadata semantics.
-                const isNestedToolMetadata = isToolMetadata && (key === 'function' || key === 'tool_calls');
-                ToolManager.#applyToolCallDelta(target[key], deltaValue, isNestedToolMetadata);
+                // Recursively apply deltas to nested objects
+                ToolManager.#applyToolCallDelta(target[key], deltaValue);
             } else {
                 // Assign other types directly
                 target[key] = deltaValue;

@@ -55,7 +55,6 @@ const SYSTEM_EXTENSIONS: &[&str] = &[
     "vectors",
     "tauritavern-version",
     "agent-system",
-    "in-app-agent",
     "mcp-manager",
     "translate",
     "tts",

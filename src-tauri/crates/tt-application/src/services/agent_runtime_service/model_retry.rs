@@ -3,28 +3,25 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::model_stream_projection::ModelStreamProjector;
-use super::{AgentCancelReceiver, AgentRuntimeService, PreparedInvocation};
+use super::{AgentCancelReceiver, AgentRuntimeService};
 use crate::errors::ApplicationError;
 use crate::services::agent_model_gateway::AgentModelExchange;
-use tt_domain::models::agent::{AgentModelRequest, AgentRunEventLevel};
+use tt_domain::models::agent::profile::AgentModelRetryPolicy;
+use tt_domain::models::agent::{AgentInvocation, AgentModelRequest, AgentRunEventLevel};
 
 impl AgentRuntimeService {
     pub(super) async fn generate_model_with_retry(
         &self,
-        prepared: &PreparedInvocation,
+        invocation: &AgentInvocation,
         round: usize,
         request: &AgentModelRequest,
+        retry: &AgentModelRetryPolicy,
         stream: bool,
         cancel: &mut AgentCancelReceiver,
     ) -> Result<AgentModelExchange, ApplicationError> {
-        let invocation = &prepared.invocation;
-        let retry = &prepared.profile.run.model_retry;
         let run_id = invocation.run_id.as_str();
         let invocation_id = invocation.id.as_str();
         let active_run = self.active_run_handle(run_id).await?;
-        let request = self
-            .hydrate_tool_images(run_id, request, prepared.accepts_images)
-            .await?;
         let mut attempt = 1_usize;
 
         loop {
@@ -54,18 +51,23 @@ impl AgentRuntimeService {
                 Some(projector) => {
                     let mut observe = |delta| projector.observe(delta);
                     self.model_gateway
-                        .generate_with_cancel(&request, Some(&mut observe), cancel.clone())
+                        .generate_with_cancel(request, Some(&mut observe), cancel.clone())
                         .await
                 }
                 None => {
                     self.model_gateway
-                        .generate_with_cancel(&request, None, cancel.clone())
+                        .generate_with_cancel(request, None, cancel.clone())
                         .await
                 }
             };
 
             match result {
-                Ok(exchange) => return Ok(exchange),
+                Ok(exchange) => {
+                    if let Some(projector) = projector {
+                        projector.clear_reasoning();
+                    }
+                    return Ok(exchange);
+                }
                 Err(error) => {
                     if let Some(projector) = projector {
                         projector.clear();

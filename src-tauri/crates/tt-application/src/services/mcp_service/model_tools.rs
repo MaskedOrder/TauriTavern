@@ -295,7 +295,7 @@ fn materialize_model_tool(
     })
 }
 
-fn validate_model_input_schema(descriptor: &ToolDescriptor) -> Result<(), String> {
+pub(super) fn validate_model_input_schema(descriptor: &ToolDescriptor) -> Result<(), String> {
     if descriptor
         .input_schema
         .get("type")

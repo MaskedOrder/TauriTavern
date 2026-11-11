@@ -37,9 +37,7 @@ test('host lifecycle listeners are installed once and fan out to registered flus
     const documentObject = new FakeEventTarget();
     documentObject.visibilityState = 'visible';
     const calls = [];
-    const service = createLifecycleFlushService({
-        windowObject, documentObject, listen: async () => () => {}, logger: { error() {} },
-    });
+    const service = createLifecycleFlushService({ windowObject, documentObject, logger: { error() {} } });
 
     service.register('session', reason => calls.push(`session:${reason}`));
     service.register('invokes', reason => calls.push(`invokes:${reason}`));
@@ -91,15 +89,24 @@ test('native exit waits for a successful flush before destroying the window', as
         releaseFlush = resolve;
     });
 
-    const service = createLifecycleFlushService({
-        windowObject, documentObject, logger: { error() {} },
-        listen: async (event, handler) => {
-            assert.equal(event, TAURI_GRACEFUL_EXIT_EVENT);
-            nativeExitHandler = handler;
-            return () => {};
+    windowObject.__TAURI__ = {
+        event: {
+            listen: async (event, handler) => {
+                assert.equal(event, TAURI_GRACEFUL_EXIT_EVENT);
+                nativeExitHandler = handler;
+                return () => {};
+            },
         },
-        getCurrentWindow: () => ({ destroy: async () => { destroyed = true; } }),
-    });
+        window: {
+            getCurrentWindow: () => ({
+                destroy: async () => {
+                    destroyed = true;
+                },
+            }),
+        },
+    };
+
+    const service = createLifecycleFlushService({ windowObject, documentObject, logger: { error() {} } });
     service.register('settings', () => flushBlock);
     service.install();
     await Promise.resolve();
@@ -120,15 +127,26 @@ test('native exit keeps the window open when persistence fails', async () => {
     let nativeExitHandler;
     let destroyed = false;
 
+    windowObject.__TAURI__ = {
+        event: {
+            listen: async (_event, handler) => {
+                nativeExitHandler = handler;
+                return () => {};
+            },
+        },
+        window: {
+            getCurrentWindow: () => ({
+                destroy: async () => {
+                    destroyed = true;
+                },
+            }),
+        },
+    };
+
     const service = createLifecycleFlushService({
         windowObject,
         documentObject,
         logger: { error: (...args) => errors.push(args) },
-        listen: async (_event, handler) => {
-            nativeExitHandler = handler;
-            return () => {};
-        },
-        getCurrentWindow: () => ({ destroy: async () => { destroyed = true; } }),
     });
     service.register('settings', () => Promise.reject(new Error('disk full')));
     service.install();

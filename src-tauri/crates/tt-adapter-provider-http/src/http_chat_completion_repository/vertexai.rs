@@ -73,7 +73,7 @@ async fn generate_gemini(
 
     let body = read_upstream_json_body(PROVIDER_NAME, "generate", response).await?;
 
-    normalizers::normalize_gemini_response(PROVIDER_NAME, body)
+    Ok(normalizers::normalize_gemini_response(body))
 }
 
 async fn generate_claude(
@@ -148,7 +148,7 @@ async fn generate_gemini_stream(
 ) -> Result<(), DomainError> {
     let response = send_gemini_stream_request(repository, config, endpoint_path, payload).await?;
 
-    gemini::stream_generate_content_with_native(PROVIDER_NAME, response, sender, cancel).await
+    HttpChatCompletionRepository::stream_sse_response(PROVIDER_NAME, response, sender, cancel).await
 }
 
 async fn send_gemini_stream_request(
@@ -226,7 +226,7 @@ pub(super) async fn generate_with_deltas(
             send_gemini_stream_request(repository, config, endpoint_path, payload).await?;
         let body =
             gemini::consume_generate_content_stream(PROVIDER_NAME, response, on_delta).await?;
-        return normalizers::normalize_gemini_response(PROVIDER_NAME, body);
+        return Ok(normalizers::normalize_gemini_response(body));
     }
 
     let (model, response) =

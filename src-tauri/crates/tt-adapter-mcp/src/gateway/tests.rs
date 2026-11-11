@@ -1,12 +1,15 @@
 use std::{
     borrow::Cow,
     collections::{BTreeMap, HashMap},
-    sync::{Arc, Mutex as StdMutex},
+    sync::{
+        Arc, Mutex as StdMutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 
 use rmcp::{
-    model::{JsonObject, ServerResult, Tool},
+    model::{ContentBlock, JsonObject, ServerResult, Tool},
     service::ServiceError,
 };
 use serde_json::{Map, Value, json};
@@ -23,8 +26,8 @@ use tt_ports::mcp::{McpCallOutcome, McpGateway, McpKnownResponse};
 
 use super::{
     RmcpMcpGateway,
-    discovery::{MAX_TOOL_BYTES, validate_tools},
-    tool_call::await_call_response,
+    discovery::{MAX_TOOL_BYTES, validate_schema, validate_tool, validate_tools},
+    tool_call::{await_call_response, project_tool_result},
 };
 
 fn gateway() -> RmcpMcpGateway {
@@ -52,10 +55,6 @@ fn invalid_and_duplicate_tools_are_isolated_without_hiding_healthy_tools() {
     let tools = vec![
         tool("healthy", json!({ "type": "object" })),
         tool("broken", json!({ "type": "not-a-json-schema-type" })),
-        tool(
-            "remote",
-            json!({ "$ref": "https://example.com/schema.json" }),
-        ),
         tool("duplicate", json!({ "type": "object" })),
         tool("duplicate", json!({ "type": "object" })),
         invalid_output,
@@ -70,12 +69,11 @@ fn invalid_and_duplicate_tools_are_isolated_without_hiding_healthy_tools() {
             .iter()
             .any(|tool| tool.native_name == "invalid-output" && tool.output_schema.is_none())
     );
-    assert_eq!(diagnostics.len(), 5);
+    assert_eq!(diagnostics.len(), 4);
     assert!(
         diagnostics
             .iter()
-            .any(|item| item.code == "mcp.tool_input_schema_invalid"
-                && item.native_name.as_deref() == Some("remote"))
+            .any(|item| item.code == "mcp.tool_input_schema_invalid")
     );
     assert!(
         diagnostics
@@ -94,6 +92,31 @@ fn invalid_and_duplicate_tools_are_isolated_without_hiding_healthy_tools() {
     );
 }
 
+#[test]
+fn remote_schema_references_are_not_fetched() {
+    let schema = json!({ "$ref": "https://example.com/schema.json" });
+
+    assert!(validate_schema(&schema).is_err());
+}
+
+#[test]
+fn annotation_hints_are_preserved_as_untrusted_data() {
+    let mut raw = tool("read", json!({ "type": "object" }));
+    raw.annotations = Some(rmcp::model::ToolAnnotations::new().read_only(true));
+
+    let (discovered, warning) = validate_tool(raw).unwrap();
+
+    assert!(warning.is_none());
+    assert_eq!(discovered.annotations["readOnlyHint"], true);
+    assert_eq!(
+        discovered.input_schema,
+        Value::Object(Map::from_iter([(
+            "type".to_string(),
+            Value::String("object".to_string()),
+        )]))
+    );
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FixtureMode {
     Modern,
@@ -102,10 +125,9 @@ enum FixtureMode {
     ModernDisconnect,
     ModernMalformed,
     ModernInvalidHeader,
-    LegacySse,
-    LegacyTypescript,
-    LegacyPython,
-    LegacyPlainText,
+    NoTools,
+    Legacy,
+    LegacyVersionRejection,
 }
 
 impl FixtureMode {
@@ -120,13 +142,6 @@ impl FixtureMode {
                 | Self::ModernInvalidHeader
         )
     }
-
-    fn is_legacy(self) -> bool {
-        matches!(
-            self,
-            Self::LegacySse | Self::LegacyTypescript | Self::LegacyPython | Self::LegacyPlainText
-        )
-    }
 }
 
 #[derive(Debug)]
@@ -137,7 +152,7 @@ struct FixtureRequest {
 
 #[tokio::test]
 async fn streamable_http_fixture_covers_modern_lifecycle_and_full_pagination() {
-    let (endpoint, _, server) = spawn_fixture(FixtureMode::Modern).await;
+    let (endpoint, requests, _, server) = spawn_fixture(FixtureMode::Modern).await;
 
     let result = gateway()
         .discover_tools(
@@ -159,11 +174,30 @@ async fn streamable_http_fixture_covers_modern_lifecycle_and_full_pagination() {
             .collect::<Vec<_>>(),
         ["first", "second"]
     );
+    assert_eq!(requests.load(Ordering::Relaxed), 3);
+}
+
+#[tokio::test]
+async fn discovery_does_not_list_tools_without_the_server_capability() {
+    let (endpoint, requests, _, server) = spawn_fixture(FixtureMode::NoTools).await;
+
+    let result = gateway()
+        .discover_tools(
+            &McpEndpoint::parse(endpoint).unwrap(),
+            &McpRequestHeaders::default(),
+            McpProtocolVersionPreference::Auto,
+        )
+        .await
+        .unwrap();
+    server.abort();
+
+    assert!(result.tools.is_empty());
+    assert_eq!(requests.load(Ordering::Relaxed), 1);
 }
 
 #[tokio::test]
 async fn discovery_retries_legacy_after_finite_sse_method_not_found() {
-    let (endpoint, _, server) = spawn_fixture(FixtureMode::LegacySse).await;
+    let (endpoint, requests, _, server) = spawn_fixture(FixtureMode::Legacy).await;
 
     let result = gateway()
         .discover_tools(
@@ -178,110 +212,32 @@ async fn discovery_retries_legacy_after_finite_sse_method_not_found() {
     assert_eq!(result.protocol_version, "2025-11-25");
     assert_eq!(result.server_name.as_deref(), Some("fixture-legacy"));
     assert_eq!(result.tools[0].native_name, "legacy_tool");
+    assert!(requests.load(Ordering::Relaxed) >= 4);
 }
 
 #[tokio::test]
-async fn auto_discovery_accepts_sessionless_http_rejections_from_legacy_servers() {
-    for mode in [
-        FixtureMode::LegacyTypescript,
-        FixtureMode::LegacyPython,
-        FixtureMode::LegacyPlainText,
-    ] {
-        let (endpoint, _, server) = spawn_fixture(mode).await;
-
-        let result = gateway()
-            .discover_tools(
-                &McpEndpoint::parse(endpoint).unwrap(),
-                &McpRequestHeaders::default(),
-                McpProtocolVersionPreference::Auto,
-            )
-            .await
-            .unwrap();
-        server.abort();
-
-        assert_eq!(result.protocol_version, "2025-11-25");
-        assert_eq!(result.server_name.as_deref(), Some("fixture-legacy"));
-        assert_eq!(result.tools[0].native_name, "legacy_tool");
-    }
-}
-
-#[tokio::test]
-async fn fixed_legacy_version_initializes_without_discovering() {
-    let (endpoint, captured, server) = spawn_fixture(FixtureMode::LegacyPython).await;
+async fn discovery_tries_legacy_lifecycle_after_generic_version_rejection() {
+    let (endpoint, requests, _, server) = spawn_fixture(FixtureMode::LegacyVersionRejection).await;
 
     let result = gateway()
         .discover_tools(
             &McpEndpoint::parse(endpoint).unwrap(),
             &McpRequestHeaders::default(),
-            McpProtocolVersionPreference::V2025_11_25,
+            McpProtocolVersionPreference::Auto,
         )
         .await
         .unwrap();
     server.abort();
 
     assert_eq!(result.protocol_version, "2025-11-25");
+    assert_eq!(result.server_name.as_deref(), Some("fixture-legacy"));
     assert_eq!(result.tools[0].native_name, "legacy_tool");
-    let requests = captured.lock().unwrap();
-    assert_eq!(requests[0].body["method"], "initialize");
-    assert!(
-        requests
-            .iter()
-            .all(|request| request.body["method"] != "server/discover")
-    );
-}
-
-#[tokio::test]
-async fn fixed_modern_version_never_falls_back_to_legacy_initialization() {
-    for mode in [FixtureMode::LegacyPython, FixtureMode::LegacySse] {
-        let (endpoint, captured, server) = spawn_fixture(mode).await;
-        let result = gateway()
-            .discover_tools(
-                &McpEndpoint::parse(endpoint).unwrap(),
-                &McpRequestHeaders::default(),
-                McpProtocolVersionPreference::V2026_07_28,
-            )
-            .await;
-        server.abort();
-
-        assert!(result.is_err());
-        let requests = captured.lock().unwrap();
-        assert_eq!(requests[0].body["method"], "server/discover");
-        assert!(
-            requests
-                .iter()
-                .all(|request| request.body["method"] != "initialize")
-        );
-    }
-}
-
-#[tokio::test]
-async fn fixed_version_rejects_a_different_negotiated_version_before_listing_tools() {
-    let (endpoint, captured, server) = spawn_fixture(FixtureMode::LegacyPython).await;
-    let error = gateway()
-        .discover_tools(
-            &McpEndpoint::parse(endpoint).unwrap(),
-            &McpRequestHeaders::default(),
-            McpProtocolVersionPreference::V2025_06_18,
-        )
-        .await
-        .unwrap_err();
-    server.abort();
-
-    let message = error.to_string();
-    assert!(message.contains("2025-11-25"), "{message}");
-    assert!(message.contains("2025-06-18"), "{message}");
-    assert!(
-        captured
-            .lock()
-            .unwrap()
-            .iter()
-            .all(|request| request.body["method"] != "tools/list")
-    );
+    assert!(requests.load(Ordering::Relaxed) >= 4);
 }
 
 #[tokio::test]
 async fn modern_call_sends_custom_and_standard_headers_and_preserves_arguments() {
-    let (endpoint, captured, server) = spawn_fixture(FixtureMode::Modern).await;
+    let (endpoint, _, captured, server) = spawn_fixture(FixtureMode::Modern).await;
     let request_headers = McpRequestHeaders::from(BTreeMap::from([(
         "x-api-key".to_string(),
         "fixture-secret".to_string(),
@@ -307,11 +263,6 @@ async fn modern_call_sends_custom_and_standard_headers_and_preserves_arguments()
     };
     assert!(result.is_error);
     assert_eq!(result.text[0].text, "fixture tool error");
-    assert_eq!(result.text[0].index, 0);
-    assert_eq!(result.images.len(), 1);
-    assert_eq!(result.images[0].index, 1);
-    assert_eq!(result.images[0].mime_type, "image/png");
-    assert_eq!(result.images[0].data, "encoded");
 
     let requests = captured.lock().unwrap();
     assert!(requests.iter().all(|request| {
@@ -349,7 +300,7 @@ async fn modern_call_sends_custom_and_standard_headers_and_preserves_arguments()
 
 #[tokio::test]
 async fn json_rpc_tool_error_is_a_known_response() {
-    let (endpoint, _, server) = spawn_fixture(FixtureMode::ModernServerError).await;
+    let (endpoint, _, _, server) = spawn_fixture(FixtureMode::ModernServerError).await;
 
     let outcome = gateway()
         .call_tool(
@@ -373,43 +324,33 @@ async fn json_rpc_tool_error_is_a_known_response() {
 }
 
 #[tokio::test]
-async fn invalid_http_headers_make_the_call_not_sent() {
-    for (name, code) in [
-        ("invalid name", "mcp.call_headers_invalid"),
-        ("Accept", "mcp.call_initialize_failed"),
-    ] {
-        let (endpoint, captured, server) = spawn_fixture(FixtureMode::Modern).await;
-        let headers = McpRequestHeaders::from(BTreeMap::from([(
-            name.to_string(),
-            "application/json".to_string(),
-        )]));
-        let outcome = gateway()
-            .call_tool(
-                &McpEndpoint::parse(endpoint).unwrap(),
-                &headers,
-                McpProtocolVersionPreference::Auto,
-                "first",
-                Map::new(),
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap();
-        server.abort();
+async fn invalid_custom_headers_make_the_call_not_sent() {
+    let request_headers = McpRequestHeaders::from(BTreeMap::from([(
+        "invalid name".to_string(),
+        "value".to_string(),
+    )]));
 
-        assert!(matches!(outcome, McpCallOutcome::NotSent(ref issue) if issue.code == code));
-        assert!(
-            captured
-                .lock()
-                .unwrap()
-                .iter()
-                .all(|request| request.body["method"] != "tools/call")
-        );
-    }
+    let outcome = gateway()
+        .call_tool(
+            &McpEndpoint::parse("https://example.com/mcp").unwrap(),
+            &request_headers,
+            McpProtocolVersionPreference::Auto,
+            "search",
+            Map::new(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        outcome,
+        McpCallOutcome::NotSent(ref issue) if issue.code == "mcp.call_headers_invalid"
+    ));
 }
 
 #[tokio::test]
 async fn invalid_standard_header_annotation_makes_the_target_not_sent() {
-    let (endpoint, captured, server) = spawn_fixture(FixtureMode::ModernInvalidHeader).await;
+    let (endpoint, _, captured, server) = spawn_fixture(FixtureMode::ModernInvalidHeader).await;
 
     let outcome = gateway()
         .call_tool(
@@ -435,8 +376,8 @@ async fn invalid_standard_header_annotation_makes_the_target_not_sent() {
 }
 
 #[tokio::test]
-async fn cancelling_after_tools_call_returns_unknown() {
-    let (endpoint, captured, server) = spawn_fixture(FixtureMode::ModernHang).await;
+async fn cancelling_after_tools_call_returns_unknown_and_aborts_local_io() {
+    let (endpoint, _, captured, server) = spawn_fixture(FixtureMode::ModernHang).await;
     let cancel = CancellationToken::new();
     let task_cancel = cancel.clone();
     let call = tokio::spawn(async move {
@@ -484,7 +425,7 @@ async fn cancelling_after_tools_call_returns_unknown() {
 #[tokio::test]
 async fn disconnect_and_malformed_response_after_commit_are_unknown() {
     for mode in [FixtureMode::ModernDisconnect, FixtureMode::ModernMalformed] {
-        let (endpoint, _, server) = spawn_fixture(mode).await;
+        let (endpoint, _, _, server) = spawn_fixture(mode).await;
         let outcome = gateway()
             .call_tool(
                 &McpEndpoint::parse(endpoint).unwrap(),
@@ -518,15 +459,31 @@ async fn committed_call_timeout_is_unknown_and_stops_local_io() {
     assert!(cancel.is_cancelled());
 }
 
+#[test]
+fn tool_result_keeps_error_text_and_reports_unsupported_blocks() {
+    let result = project_tool_result(rmcp::model::CallToolResult::error(vec![
+        ContentBlock::text("failed"),
+        ContentBlock::image("encoded", "image/png"),
+    ]));
+
+    assert!(result.is_error);
+    assert_eq!(result.text[0].text, "failed");
+    assert_eq!(result.text[0].index, 0);
+    assert_eq!(result.diagnostics[0].content_index, Some(1));
+}
+
 async fn spawn_fixture(
     mode: FixtureMode,
 ) -> (
     String,
+    Arc<AtomicUsize>,
     Arc<StdMutex<Vec<FixtureRequest>>>,
     tokio::task::JoinHandle<()>,
 ) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let requests = Arc::new(AtomicUsize::new(0));
+    let request_count = requests.clone();
     let captured = Arc::new(StdMutex::new(Vec::new()));
     let captured_requests = captured.clone();
     let server = tokio::spawn(async move {
@@ -537,6 +494,7 @@ async fn spawn_fixture(
             let Ok((http_method, headers, request)) = read_http_request(&mut stream).await else {
                 return;
             };
+            request_count.fetch_add(1, Ordering::Relaxed);
             captured_requests.lock().unwrap().push(FixtureRequest {
                 headers,
                 body: request.clone(),
@@ -551,38 +509,56 @@ async fn spawn_fixture(
             {
                 continue;
             }
-            let (status, content_type, headers, body) =
-                fixture_response(mode, &http_method, &request);
-            write_http_response(&mut stream, status, content_type, headers, body)
+            if mode == FixtureMode::ModernMalformed
+                && request.get("method").and_then(Value::as_str) == Some("tools/call")
+            {
+                stream
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 8\r\nConnection: close\r\n\r\nnot-json",
+                        )
+                        .await
+                        .unwrap();
+                continue;
+            }
+            let sse = matches!(mode, FixtureMode::Legacy)
+                && request.get("method").and_then(Value::as_str) == Some("server/discover");
+            let (status, headers, response) = fixture_response(mode, &http_method, &request);
+            write_http_response(&mut stream, status, headers, response, sse)
                 .await
                 .unwrap();
         }
     });
-    (endpoint, captured, server)
+    (endpoint, requests, captured, server)
 }
 
 fn fixture_response(
     mode: FixtureMode,
     http_method: &str,
     request: &Value,
-) -> (
-    u16,
-    &'static str,
-    Vec<(&'static str, &'static str)>,
-    Vec<u8>,
-) {
+) -> (u16, Vec<(&'static str, &'static str)>, Option<Value>) {
     if http_method == "DELETE" {
-        return (204, "application/json", Vec::new(), Vec::new());
+        return (204, Vec::new(), None);
     }
     let id = request.get("id").cloned().unwrap_or(Value::Null);
     let method = request.get("method").and_then(Value::as_str).unwrap_or("");
-    if mode == FixtureMode::ModernMalformed && method == "tools/call" {
-        return (200, "application/json", Vec::new(), b"not-json".to_vec());
-    }
-    let (status, content_type, headers, body) = match (mode, method) {
+    match (mode, method) {
+        (FixtureMode::NoTools, "server/discover") => (
+            200,
+            Vec::new(),
+            Some(json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "resultType": "complete",
+                    "supportedVersions": ["2026-07-28"],
+                    "capabilities": {},
+                    "ttlMs": 0,
+                    "cacheScope": "private"
+                }
+            })),
+        ),
         (mode, "server/discover") if mode.is_modern() => (
             200,
-            "application/json",
             Vec::new(),
             Some(json!({
                 "jsonrpc": "2.0",
@@ -624,7 +600,6 @@ fn fixture_response(
             };
             (
                 200,
-                "application/json",
                 Vec::new(),
                 Some(json!({
                     "jsonrpc": "2.0",
@@ -645,7 +620,6 @@ fn fixture_response(
         }
         (FixtureMode::ModernServerError, "tools/call") => (
             400,
-            "application/json",
             Vec::new(),
             Some(json!({
                 "jsonrpc": "2.0",
@@ -659,25 +633,20 @@ fn fixture_response(
         ),
         (mode, "tools/call") if mode.is_modern() => (
             200,
-            "application/json",
             Vec::new(),
             Some(json!({
                 "jsonrpc": "2.0",
                 "id": id,
                 "result": {
                     "resultType": "complete",
-                    "content": [
-                        { "type": "text", "text": "fixture tool error" },
-                        { "type": "image", "data": "encoded", "mimeType": "image/png" }
-                    ],
+                    "content": [{ "type": "text", "text": "fixture tool error" }],
                     "structuredContent": { "received": true },
                     "isError": true
                 }
             })),
         ),
-        (FixtureMode::LegacySse, "server/discover") => (
+        (FixtureMode::Legacy, "server/discover") => (
             200,
-            "text/event-stream",
             Vec::new(),
             Some(json!({
                 "jsonrpc": "2.0",
@@ -685,35 +654,20 @@ fn fixture_response(
                 "error": { "code": -32601, "message": "Method not found" }
             })),
         ),
-        (FixtureMode::LegacyTypescript, "server/discover") => (
+        (FixtureMode::LegacyVersionRejection, "server/discover") => (
             400,
-            "application/json",
             Vec::new(),
             Some(json!({
                 "jsonrpc": "2.0",
                 "id": null,
                 "error": {
                     "code": -32000,
-                    "message": "Bad Request: Server not initialized"
+                    "message": "Bad Request: Unsupported protocol version: 2026-07-28"
                 }
             })),
         ),
-        (FixtureMode::LegacyPython, "server/discover") => (
-            400,
-            "application/json",
-            Vec::new(),
-            Some(json!({
-                "jsonrpc": "2.0",
-                "id": "server-error",
-                "error": { "code": -32600, "message": "Bad Request: Missing session ID" }
-            })),
-        ),
-        (FixtureMode::LegacyPlainText, "server/discover") => {
-            (400, "text/plain", Vec::new(), Some(json!("Bad Request")))
-        }
-        (mode, "initialize") if mode.is_legacy() => (
+        (FixtureMode::Legacy | FixtureMode::LegacyVersionRejection, "initialize") => (
             200,
-            "application/json",
             vec![("Mcp-Session-Id", "fixture-session")],
             Some(json!({
                 "jsonrpc": "2.0",
@@ -725,12 +679,12 @@ fn fixture_response(
                 }
             })),
         ),
-        (mode, "notifications/initialized") if mode.is_legacy() => {
-            (202, "application/json", Vec::new(), None)
-        }
-        (mode, "tools/list") if mode.is_legacy() => (
+        (
+            FixtureMode::Legacy | FixtureMode::LegacyVersionRejection,
+            "notifications/initialized",
+        ) => (202, Vec::new(), None),
+        (FixtureMode::Legacy | FixtureMode::LegacyVersionRejection, "tools/list") => (
             200,
-            "application/json",
             Vec::new(),
             Some(json!({
                 "jsonrpc": "2.0",
@@ -745,7 +699,6 @@ fn fixture_response(
         ),
         _ => (
             404,
-            "application/json",
             Vec::new(),
             Some(json!({
                 "jsonrpc": "2.0",
@@ -753,15 +706,7 @@ fn fixture_response(
                 "error": { "code": -32601, "message": "Method not found" }
             })),
         ),
-    };
-    let body = body
-        .map(|value| match content_type {
-            "text/event-stream" => format!("event: message\ndata: {value}\n\n").into_bytes(),
-            "text/plain" => value.as_str().unwrap().as_bytes().to_vec(),
-            _ => serde_json::to_vec(&value).unwrap(),
-        })
-        .unwrap_or_default();
-    (status, content_type, headers, body)
+    }
 }
 
 async fn read_http_request(
@@ -811,16 +756,30 @@ async fn read_http_request(
 async fn write_http_response(
     stream: &mut TcpStream,
     status: u16,
-    content_type: &str,
     headers: Vec<(&str, &str)>,
-    body: Vec<u8>,
+    body: Option<Value>,
+    sse: bool,
 ) -> std::io::Result<()> {
+    let body = body
+        .map(|value| {
+            if sse {
+                format!("event: message\ndata: {value}\n\n").into_bytes()
+            } else {
+                serde_json::to_vec(&value).unwrap()
+            }
+        })
+        .unwrap_or_default();
     let reason = match status {
         200 => "OK",
         202 => "Accepted",
         204 => "No Content",
         404 => "Not Found",
         _ => "Error",
+    };
+    let content_type = if sse {
+        "text/event-stream"
+    } else {
+        "application/json"
     };
     let mut response = format!(
         "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n",

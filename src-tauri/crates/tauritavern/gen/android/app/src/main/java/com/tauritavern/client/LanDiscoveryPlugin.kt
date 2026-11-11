@@ -3,7 +3,10 @@ package com.tauritavern.client
 import android.app.Activity
 import android.net.wifi.WifiManager
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
@@ -16,9 +19,14 @@ class LanDiscoveryArgs {
 }
 
 @TauriPlugin
-class LanDiscoveryPlugin(private val activity: Activity) : Plugin(activity) {
-  private val lifecycle = (activity as AppCompatActivity).lifecycle
+class LanDiscoveryPlugin(private val activity: Activity) : Plugin(activity), DefaultLifecycleObserver {
+  // Match Wry's lifecycle source so every release has a corresponding Rust resume event.
+  private val lifecycle = ProcessLifecycleOwner.get().lifecycle
   private var multicastLock: WifiManager.MulticastLock? = null
+
+  init {
+    activity.runOnUiThread { lifecycle.addObserver(this) }
+  }
 
   @Command
   fun setEnabled(invoke: Invoke) {
@@ -48,11 +56,12 @@ class LanDiscoveryPlugin(private val activity: Activity) : Plugin(activity) {
     }
   }
 
-  override fun onPause(activity: AppCompatActivity) {
+  override fun onPause(owner: LifecycleOwner) {
     releaseMulticastLock()
   }
 
   override fun onDestroy(activity: AppCompatActivity) {
+    lifecycle.removeObserver(this)
     releaseMulticastLock()
   }
 

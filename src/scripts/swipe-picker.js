@@ -5,9 +5,8 @@ import { callGenericPopup, Popup, POPUP_RESULT, POPUP_TYPE } from './popup.js';
 import { power_user } from './power-user.js';
 import { isMobile } from './RossAscends-mods.js';
 import { getTokenCountAsync } from './tokenizers.js';
-import { addLongPressEvent, clamp, copyText, timestampToMoment, uuidv4 } from './utils.js';
+import { addLongPressEvent, clamp, copyText, timestampToMoment } from './utils.js';
 import { chat, deleteSwipe, ensureSwipes, hydrateChatMessageSwipes, isMessageSwipeable, isSwipingAllowed, swipe, syncMesToSwipe } from '/script.js';
-import { keepFocus, setAriaRelation } from './dom-handlers.js';
 
 /**
  * Returns whether a swipe picker can be opened for the message.
@@ -61,7 +60,6 @@ async function openSwipePicker(messageId) {
     if (!await hydrateChatMessageSwipes(messageId)) return;
 
     const canJumpToSwipe = canJumpToSwipeForMessage(messageId);
-    const swipeKeys = message.swipes.map(() => uuidv4());
     let selectedSwipeId = clamp(Number(message.swipe_id ?? 0), 0, message.swipes.length - 1);
     const swipeIdInputId = `swipe_picker_id_${messageId}`;
     const wrapper = document.createElement('div');
@@ -78,7 +76,6 @@ async function openSwipePicker(messageId) {
 
     const listContainer = document.createElement('div');
     listContainer.classList.add('swipe_picker_div', 'flex1', 'marginTop10');
-    listContainer.setAttribute('role', 'list');
     wrapper.appendChild(listContainer);
 
     /** @type {Popup} */
@@ -103,7 +100,6 @@ async function openSwipePicker(messageId) {
             } else {
                 element.removeAttribute('highlight');
             }
-            element.querySelector(':scope > .sr-only').setAttribute('aria-pressed', String(isSelected));
         });
         syncSwipeIdInput();
     }
@@ -138,7 +134,6 @@ async function openSwipePicker(messageId) {
             const swipeText = String(swipe ?? '');
             const template = $('#past_chat_template .select_chat_block_wrapper').clone();
             const block = template.find('.select_chat_block');
-            const primary = block[0].querySelector(':scope > .sr-only');
             block.removeClass('select_chat_block').addClass('swipe_picker_block');
             block.find('.select_chat_actions').removeClass('gap10px');
             const branchButton = template.find('.exportRawChatButton');
@@ -161,7 +156,6 @@ async function openSwipePicker(messageId) {
             block.attr({
                 file_name: `swipe-${index + 1}`,
                 'data-swipe-id': index,
-                'data-swipe-key': swipeKeys[index],
             });
 
             template.find('.renameChatButton, .exportChatButton').remove();
@@ -182,16 +176,32 @@ async function openSwipePicker(messageId) {
                 });
             deleteButton
                 .removeAttr('file_name')
-                .prop('disabled', !canDeleteSwipe)
-                .attr({ title: t`Delete Swipe`, 'data-i18n': '[title]Delete Swipe' })
+                .attr('aria-disabled', String(!canDeleteSwipe))
                 .removeClass('fa-skull')
                 .addClass('swipe_picker_delete fa-fw fa-trash-can')
                 .toggleClass('hoverglow', canDeleteSwipe)
                 .toggleClass('disabled', !canDeleteSwipe)
+                .each(function () {
+                    if (canDeleteSwipe) {
+                        $(this)
+                            .attr({
+                                title: t`Delete Swipe`,
+                                'data-i18n': '[title]Delete Swipe',
+                            });
+                    } else {
+                        $(this)
+                            .removeAttr('title')
+                            .removeAttr('data-i18n');
+                    }
+                })
                 .off('click')
                 .on('click', async (event) => {
                     event.preventDefault();
                     event.stopPropagation();
+
+                    if (!canDeleteSwipe) {
+                        return;
+                    }
 
                     const nextSelectedSwipeId = index < selectedSwipeId
                         ? selectedSwipeId - 1
@@ -215,7 +225,6 @@ async function openSwipePicker(messageId) {
                         return;
                     }
 
-                    swipeKeys.splice(index, 1);
                     selectedSwipeId = clamp(nextSelectedSwipeId, 0, message.swipes.length - 1);
 
                     if (swipeIdInput instanceof HTMLInputElement) {
@@ -231,7 +240,7 @@ async function openSwipePicker(messageId) {
             expandCheckbox.type = 'checkbox';
             expandCheckbox.id = expandCheckboxId;
             expandCheckbox.classList.add('swipe_picker_expand_toggle');
-            primary.after(expandCheckbox);
+            block[0].prepend(expandCheckbox);
 
             const expandLabel = document.createElement('label');
             expandLabel.htmlFor = expandCheckboxId;
@@ -241,9 +250,8 @@ async function openSwipePicker(messageId) {
             expandLabel.addEventListener('click', (event) => event.stopPropagation());
 
             // Add copy button
-            const copyButton = document.createElement('button');
-            copyButton.type = 'button';
-            copyButton.classList.add('swipe_picker_copy', 'interactable', 'fa-solid', 'fa-fw', 'fa-copy');
+            const copyButton = document.createElement('div');
+            copyButton.classList.add('swipe_picker_copy', 'fa-solid', 'fa-fw', 'fa-copy');
             copyButton.title = t`Copy`;
             copyButton.setAttribute('data-i18n', '[title]Copy');
             copyButton.addEventListener('click', async (event) => {
@@ -261,12 +269,6 @@ async function openSwipePicker(messageId) {
             template.find('.chat_file_size').text(swipeDetails.length ? `(${swipeDetails[0]}${swipeDetails.length > 1 ? ',' : ')'}` : '');
             template.find('.chat_messages_num').text(swipeDetails.length > 1 ? `${swipeDetails.slice(1).join(', ')})` : '');
             template.find('.select_chat_block_mes').text(previewText ? swipeText : t`(empty swipe)`);
-            const name = template.find('.select_chat_block_filename')[0];
-            setAriaRelation(primary, 'labelledby', name);
-            setAriaRelation(primary, 'describedby', template.find('.select_chat_info')[0]);
-            setAriaRelation(copyButton, 'labelledby', copyButton, name);
-            setAriaRelation(branchButton[0], 'labelledby', branchButton[0], name);
-            setAriaRelation(deleteButton[0], 'labelledby', deleteButton[0], name);
 
             block.on('click', () => setSelectedSwipe(index));
             block.on('dblclick', async () => {
@@ -281,25 +283,18 @@ async function openSwipePicker(messageId) {
             return template[0];
         }));
 
-        keepFocus(
-            () => listContainer.querySelectorAll('.select_chat_block_wrapper'),
-            item => item.querySelector('.swipe_picker_block').getAttribute('data-swipe-key'),
-            () => {
-                listContainer.replaceChildren(...swipeBlocks);
-                setSelectedSwipe(selectedSwipeId);
-                if (swipeBlocks.length === 0) {
-                    const empty = document.createElement('div');
-                    empty.setAttribute('role', 'listitem');
-                    empty.classList.add('textAlignCenter', 'opacity50p', 'padding10');
-                    empty.textContent = t`No swipes available.`;
-                    listContainer.replaceChildren(empty);
-                }
-            },
-        );
+        listContainer.replaceChildren(...swipeBlocks);
+        setSelectedSwipe(selectedSwipeId);
+
+        if (swipeBlocks.length === 0) {
+            const empty = document.createElement('div');
+            empty.classList.add('textAlignCenter', 'opacity50p', 'padding10');
+            empty.textContent = t`No swipes available.`;
+            listContainer.replaceChildren(empty);
+        }
     }
 
     popup = new Popup(wrapper, POPUP_TYPE.CONFIRM, '', {
-        label: description,
         okButton: canJumpToSwipe ? t`Go` : false,
         cancelButton: false,
         customInputs: [{

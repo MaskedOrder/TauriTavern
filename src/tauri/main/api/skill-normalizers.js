@@ -202,7 +202,7 @@ export function normalizeSkillScope(value, label = 'scope') {
 
     const scope = requirePlainObject(value, label);
     const kind = requireNonEmptyString(scope.kind, `${label}.kind`);
-    if (kind === 'global' || kind === 'builtin') {
+    if (kind === 'global') {
         return { kind };
     }
     if (kind === 'preset') {

@@ -1,13 +1,14 @@
 use serde_json::{Map, Value};
 
-use crate::services::agent_workspace_scope::WorkspaceAccessPolicy;
+use super::policy::WorkspaceAccessPolicy;
 use tt_domain::errors::DomainError;
 use tt_domain::models::agent::{AgentToolResult, WorkspacePath};
 use tt_domain::models::tool::ToolInvocation;
 
 pub(super) use crate::services::agent_tools::common::{
     WORKSPACE_PATH_IS_DIRECTORY_CODE, ensure_only_args, optional_bool_arg, optional_usize_arg,
-    required_raw_string_arg, required_trimmed_string_arg, workspace_path_is_directory_message,
+    required_raw_string_arg, required_trimmed_string_arg, tool_error,
+    workspace_path_is_directory_message,
 };
 
 pub(super) struct WorkspaceToolError {
@@ -17,7 +18,7 @@ pub(super) struct WorkspaceToolError {
 
 impl WorkspaceToolError {
     pub(super) fn into_tool_result(self, call: &ToolInvocation) -> AgentToolResult {
-        AgentToolResult::error(call, self.code, &self.message)
+        tool_error(call, self.code, &self.message)
     }
 }
 
@@ -30,25 +31,20 @@ pub(crate) fn classify_workspace_io_error(
     error: DomainError,
 ) -> Result<AgentToolResult, DomainError> {
     match error {
-        error @ DomainError::WorkspaceAccessDenied { .. } => Ok(AgentToolResult::error(
-            call,
-            "workspace.access_denied",
-            &error.to_string(),
-        )),
-        DomainError::NotFound(message) => Ok(AgentToolResult::error(
-            call,
-            "workspace.file_not_found",
-            &message,
-        )),
-        DomainError::WorkspacePathIsDirectory { path } => Ok(AgentToolResult::error(
+        DomainError::NotFound(message) => {
+            Ok(tool_error(call, "workspace.file_not_found", &message))
+        }
+        DomainError::WorkspacePathIsDirectory { path } => Ok(tool_error(
             call,
             WORKSPACE_PATH_IS_DIRECTORY_CODE,
             &workspace_path_is_directory_message(&path),
         )),
-        DomainError::WorkspaceFileNotText { path } => Ok(AgentToolResult::error(
+        DomainError::WorkspaceFileNotText { path } => Ok(tool_error(
             call,
             "workspace.file_not_text",
-            &format!("`{path}` is not UTF-8 text."),
+            &format!(
+                "The file `{path}` is not UTF-8 text, so this text reader cannot open it. Choose another text file or continue with the workspace context already available."
+            ),
         )),
         other => Err(other),
     }

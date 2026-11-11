@@ -1,16 +1,17 @@
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 
-use crate::chat_jsonl::{RecordPrefix, trim_whitespace};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tt_domain::errors::DomainError;
 use tt_domain::models::chat::strip_jsonl_extension;
+use tt_ports::repositories::chat_repository::ChatSearchResult;
 
 use super::super::FileChatRepository;
-use super::projection::{self, FileProjection, TailProjection};
-use super::{ChatFileDescriptor, ChatSummary, ScannedSummary};
+use super::projection::{HeaderProjection, TailProjection};
+use super::{ChatFileDescriptor, ScannedSummary};
 
 const FINGERPRINT_WORDS: usize = 64;
 
@@ -100,7 +101,7 @@ impl FileChatRepository {
         &self,
         descriptors: Vec<ChatFileDescriptor>,
         fragments: &[String],
-    ) -> (Vec<ChatSummary>, bool) {
+    ) -> (Vec<ChatSearchResult>, bool) {
         let mut results = Vec::new();
         let mut complete = true;
 
@@ -118,9 +119,8 @@ impl FileChatRepository {
                     continue;
                 }
             };
-            // Even an unmatched damaged file prevents caching this whole query.
-            complete &= !entry.preview_unavailable;
-            let summary = entry.summary;
+            let mut summary = entry.summary.clone();
+            summary.chat_metadata = None;
             let file_stem = strip_jsonl_extension(&descriptor.file_name);
 
             if Self::file_stem_matches_all(file_stem, fragments) {
@@ -190,7 +190,7 @@ impl FileChatRepository {
         while let Some(line) = lines.next_line().await.map_err(|error| {
             DomainError::InternalError(format!("Failed to read chat file {:?}: {error}", path))
         })? {
-            if trim_whitespace(line.as_bytes()).is_empty() {
+            if line.trim().is_empty() {
                 continue;
             }
             let line = line.to_lowercase();
@@ -235,41 +235,52 @@ pub(super) async fn scan_with_fingerprint(
         DomainError::InternalError(format!("Failed to open chat file {:?}: {error}", path))
     })?;
     let mut lines = BufReader::new(file).lines();
-    let mut prefix = RecordPrefix::default();
     let mut line_count = 0;
     let mut header = None;
-    let mut last_line = Vec::new();
+    let mut last_line = String::new();
     let mut fingerprint = SearchFingerprint::new();
     fingerprint.add_text(strip_jsonl_extension(fallback_file_name));
 
     while let Some(line) = lines.next_line().await.map_err(|error| {
         DomainError::InternalError(format!("Failed to read chat file {:?}: {error}", path))
     })? {
-        let record = prefix.normalize(line.as_bytes());
-        if record.is_empty() {
+        if line.trim().is_empty() {
             continue;
         }
-        let record = &line.as_bytes()[record];
         if header.is_none() {
-            header = Some(projection::parse_header(record, path)?);
+            header = Some(parse_record(path, "first non-empty chat record", &line)?);
         }
         line_count += 1;
         fingerprint.add_text(&line);
         last_line.clear();
-        last_line.extend_from_slice(record);
+        last_line.push_str(&line);
     }
 
-    let tail = if line_count <= 1 {
+    let header: HeaderProjection = header.unwrap_or_default();
+    let tail: TailProjection = if line_count == 0 {
         TailProjection::default()
     } else {
-        projection::parse_tail(&last_line, path)?
+        parse_record(path, "last non-empty chat record", &last_line)?
     };
     Ok(ScannedSummary {
-        projection: FileProjection {
-            line_count,
-            header: header.unwrap_or_default(),
-            tail,
-        },
+        line_count,
+        character_name: header.character_name,
+        chat_metadata: header.chat_metadata,
+        last_message: tail.mes,
+        send_date: tail.send_date,
         fingerprint: Some(fingerprint),
+    })
+}
+
+fn parse_record<T: DeserializeOwned>(
+    path: &Path,
+    record_name: &str,
+    line: &str,
+) -> Result<T, DomainError> {
+    serde_json::from_str(line).map_err(|error| {
+        DomainError::InvalidData(format!(
+            "Failed to parse {record_name} in {}: {error}",
+            path.display()
+        ))
     })
 }

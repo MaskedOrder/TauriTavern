@@ -4,7 +4,9 @@ use crate::dto::agent_dto::{
     AgentRunTimelineDelegationEdgeDto, AgentRunTimelineInvocationDto, AgentRunTimelineProjectionDto,
 };
 use crate::errors::ApplicationError;
-use tt_domain::models::agent::{AgentInvocation, AgentTaskRecord, ROOT_AGENT_INVOCATION_ID};
+use tt_domain::models::agent::{
+    AgentInvocation, AgentInvocationExitPolicy, AgentTaskRecord, ROOT_AGENT_INVOCATION_ID,
+};
 
 pub(super) fn build_run_timeline_projection(
     invocations: &[AgentInvocation],
@@ -48,7 +50,8 @@ fn foreground_invocation_ids(invocations: &[AgentInvocation]) -> Vec<String> {
     let mut candidates = invocations
         .iter()
         .filter(|invocation| {
-            invocation.kind.owns_run_status() && invocation.id != ROOT_AGENT_INVOCATION_ID
+            invocation.exit_policy == AgentInvocationExitPolicy::RunFinishAllowed
+                && invocation.id != ROOT_AGENT_INVOCATION_ID
         })
         .map(|invocation| (invocation.id.clone(), invocation.created_at))
         .collect::<Vec<_>>();

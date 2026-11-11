@@ -3,7 +3,6 @@
 import {
     loadAgentContextPolicy,
     normalizeAgentContextPolicy,
-    projectAgentPromptInputs,
 } from '../../../scripts/tauritavern/agent/agent-context-policy.js';
 import {
     loadResolvedAgentSystemPrompt,
@@ -11,7 +10,6 @@ import {
 } from '../../../scripts/tauritavern/agent/agent-system-prompt.js';
 import {
     buildSettingsWithCurrentModelConnectionSnapshot,
-    createMacroContextFromSnapshot,
     normalizeFrozenRunInputSnapshot,
 } from '../../../scripts/tauritavern/agent/frozen-run-input-snapshot.js';
 
@@ -63,19 +61,15 @@ export async function buildAgentPromptSnapshotSeed(input = {}) {
     };
 }
 
-/** @param {{ currentPromptSnapshotSeed: any; frozenRunInputSnapshot: any }} input */
-export async function materializeCurrentPromptSnapshot(input) {
-    const { payload, snapshotInputs, generationIntent } = await prepareCurrentPromptPayload(input);
-    const { createAgentPromptSnapshot } = await import('../../../scripts/openai.js');
-    return {
-        frozenRunInputSnapshot: input.frozenRunInputSnapshot,
-        generationIntent: { source: LEGACY_DRY_RUN_SOURCE, ...generationIntent },
-        promptSnapshot: createAgentPromptSnapshot(payload, snapshotInputs),
-    };
+/**
+ * @param {{ generationType?: string; generateOptions?: Record<string, any>; profileId?: string; agentContextPolicy?: Record<string, any>; agentSystemPrompt?: string }} input
+ * @returns {Promise<{ promptSnapshot: { contextPolicy: any; chatCompletionPayload: any; worldInfoActivation?: any }; frozenRunInputSnapshot: any; generationIntent: any }>}
+ */
+export async function buildAgentPromptSnapshot(input = {}) {
+    return materializeCurrentPromptSnapshot(await buildAgentPromptSnapshotSeed(input));
 }
 
-/** @param {{ currentPromptSnapshotSeed: any; frozenRunInputSnapshot: any }} input */
-export async function prepareCurrentPromptPayload(input) {
+export async function materializeCurrentPromptSnapshot(input) {
     const seed = input?.currentPromptSnapshotSeed;
     if (!seed || typeof seed !== 'object' || Array.isArray(seed)) {
         throw new Error('agent.current_prompt_snapshot_seed_required: currentPromptSnapshotSeed must be an object');
@@ -83,7 +77,8 @@ export async function prepareCurrentPromptPayload(input) {
     const generationType = normalizeGenerationType(seed.generationType);
     const messages = seed.messages;
     assertMessagesReady(messages);
-    const frozenRunInputSnapshot = input.frozenRunInputSnapshot;
+    assertNoExternalToolTurns(messages);
+    const frozenRunInputSnapshot = normalizeFrozenRunInputSnapshot(input.frozenRunInputSnapshot);
     const openai = await import('../../../scripts/openai.js');
     const settings = await buildSettingsWithCurrentModelConnectionSnapshot(
         openai.oai_settings,
@@ -94,11 +89,7 @@ export async function prepareCurrentPromptPayload(input) {
         throw new Error('agent.model_required: current chat-completion source did not resolve a model');
     }
 
-    const workingInputs = projectAgentPromptInputs(frozenRunInputSnapshot.promptInputs, seed.contextPolicy);
-    const macroContext = openai.createChatCompletionMacroContext(
-        createMacroContextFromSnapshot(frozenRunInputSnapshot, workingInputs), settings, model,
-    );
-    const { generate_data: payload } = /** @type {any} */ (await openai.createGenerationParameters(
+    const { generate_data: payload } = await openai.createGenerationParameters(
         settings,
         model,
         generationType,
@@ -106,18 +97,21 @@ export async function prepareCurrentPromptPayload(input) {
         {
             jsonSchema: seed.jsonSchema ?? null,
             agentMode: true,
-            macroContext,
         },
-    ));
+    );
+
+    assertNoExternalTools(payload);
+    assertNoExternalToolTurns(payload.messages);
 
     return {
-        payload,
-        snapshotInputs: {
-            settings,
+        promptSnapshot: {
             contextPolicy: seed.contextPolicy,
-            worldInfoActivation: seed.worldInfoActivation,
+            chatCompletionPayload: payload,
+            ...(seed.worldInfoActivation ? { worldInfoActivation: seed.worldInfoActivation } : {}),
         },
+        frozenRunInputSnapshot,
         generationIntent: {
+            source: LEGACY_DRY_RUN_SOURCE,
             generationType,
             chatCompletionSource: payload.chat_completion_source,
             model: payload.model,
@@ -125,12 +119,10 @@ export async function prepareCurrentPromptPayload(input) {
     };
 }
 
-/** @param {unknown} value */
 function normalizeGenerationType(value) {
     return String(value || 'normal').trim() || 'normal';
 }
 
-/** @param {any} value */
 function normalizeGenerateOptions(value) {
     if (value == null) {
         return {};
@@ -141,11 +133,8 @@ function normalizeGenerateOptions(value) {
     return value;
 }
 
-/** @param {any} script @param {string} generationType @param {Record<string, any>} generateOptions */
 async function captureAgentDryRun(script, generationType, generateOptions) {
-    /** @type {any} */
     let generateData = null;
-    /** @param {any} capturedGenerateData @param {boolean} dryRun */
     const generateListener = (capturedGenerateData, dryRun) => {
         if (dryRun === true) {
             generateData = capturedGenerateData;
@@ -166,14 +155,22 @@ async function captureAgentDryRun(script, generationType, generateOptions) {
     return { generateData };
 }
 
-/** @param {any} messages */
 function assertMessagesReady(messages) {
     if (!Array.isArray(messages)) {
         throw new Error('agent.prompt_snapshot_messages_required: dryRun did not produce chat-completion messages');
     }
 }
 
-/** @param {any[]} messages */
+function assertNoExternalTools(payload) {
+    const tools = payload?.tools;
+    if (Array.isArray(tools) && tools.length > 0) {
+        throw new Error('agent.external_tools_unsupported: Agent runtime owns the tool registry');
+    }
+    if (Object.prototype.hasOwnProperty.call(payload || {}, 'tool_choice')) {
+        throw new Error('agent.external_tool_choice_unsupported: Agent runtime owns tool choice');
+    }
+}
+
 function assertNoExternalToolTurns(messages) {
     if (!Array.isArray(messages)) {
         return;

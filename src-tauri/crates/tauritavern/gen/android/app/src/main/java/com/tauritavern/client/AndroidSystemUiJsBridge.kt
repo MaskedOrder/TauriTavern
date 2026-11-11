@@ -5,15 +5,15 @@ import android.webkit.JavascriptInterface
 
 class AndroidSystemUiJsBridge(
   private val mainHandler: Handler,
-  private val windowLayout: AndroidWindowLayout,
+  private val insetsBridge: AndroidInsetsBridge,
 ) {
   @JavascriptInterface
   fun setImmersiveFullscreenEnabled(enabled: Boolean) {
-    mainHandler.post { windowLayout.setImmersiveFullscreenEnabled(enabled) }
+    mainHandler.post { insetsBridge.setImmersiveFullscreenEnabled(enabled) }
   }
 
   @JavascriptInterface
-  fun isImmersiveFullscreenEnabled(): Boolean = windowLayout.isImmersiveFullscreenEnabled()
+  fun isImmersiveFullscreenEnabled(): Boolean = insetsBridge.isImmersiveFullscreenEnabled()
 
   companion object {
     const val INTERFACE_NAME = "TauriTavernAndroidSystemUiBridge"

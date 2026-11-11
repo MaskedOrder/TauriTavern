@@ -1,5 +1,5 @@
 import { writeClipboardText } from '../../../../tauri-bridge.js';
-import { hostPlatform } from '../../../../scripts/util/host-identity.js';
+import { isAndroidRuntime } from '../../../../scripts/util/mobile-runtime.js';
 
 const COMPAT_KEY = '__TAURITAVERN_MOBILE_RUNTIME_COMPAT__';
 
@@ -165,7 +165,7 @@ function hasOwnPolyfill(target, property) {
 }
 
 function installAndroidClipboardWriteCompat(targetWindow) {
-    if (hostPlatform() !== 'android') {
+    if (!isAndroidRuntime()) {
         return;
     }
 
