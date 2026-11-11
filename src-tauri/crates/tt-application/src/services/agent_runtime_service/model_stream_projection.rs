@@ -1,4 +1,4 @@
-//! Non-authoritative live projections of model responses and workspace edit tools.
+//! Non-authoritative live projections of model reasoning and workspace edit tools.
 //! Canonical arguments continue through the existing final-response path.
 
 use std::collections::BTreeMap;
@@ -43,18 +43,17 @@ pub struct AgentRunLiveCall {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentRunLiveResponse {
+pub struct AgentRunLiveReasoning {
     pub generation: ModelAttemptGeneration,
     pub invocation_exit_policy: AgentInvocationExitPolicy,
     pub text: String,
-    pub reasoning: String,
     pub tool_ids: Vec<ToolId>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentRunLiveProjection {
     pub calls: BTreeMap<AgentRunLiveCallKey, AgentRunLiveCall>,
-    pub responses: BTreeMap<String, AgentRunLiveResponse>,
+    pub reasoning: BTreeMap<String, AgentRunLiveReasoning>,
 }
 
 pub(super) struct ModelStreamProjector {
@@ -86,12 +85,21 @@ impl ModelStreamProjector {
 
     pub(super) fn observe(&mut self, delta: AgentModelStreamDelta) {
         let (tool_call_index, tool_id, arguments_fragment) = match delta {
-            AgentModelStreamDelta::Text { text } => {
-                self.append_response(&text, false);
-                return;
-            }
             AgentModelStreamDelta::Reasoning { text } => {
-                self.append_response(&text, true);
+                if !text.is_empty() {
+                    self.sender.send_modify(|state| {
+                        let reasoning = state
+                            .reasoning
+                            .entry(self.invocation_id.clone())
+                            .or_insert_with(|| AgentRunLiveReasoning {
+                                generation: self.generation,
+                                invocation_exit_policy: self.invocation_exit_policy,
+                                text: String::new(),
+                                tool_ids: self.tool_ids.clone(),
+                            });
+                        reasoning.text.push_str(&text);
+                    });
+                }
                 return;
             }
             AgentModelStreamDelta::ToolCall {
@@ -103,14 +111,14 @@ impl ModelStreamProjector {
         if !self.tool_ids.contains(&tool_id) {
             self.tool_ids.push(tool_id.clone());
             self.sender.send_if_modified(|state| {
-                let Some(response) = state
-                    .responses
+                let Some(reasoning) = state
+                    .reasoning
                     .get_mut(&self.invocation_id)
-                    .filter(|response| response.generation == self.generation)
+                    .filter(|reasoning| reasoning.generation == self.generation)
                 else {
                     return false;
                 };
-                response.tool_ids.push(tool_id.clone());
+                reasoning.tool_ids.push(tool_id.clone());
                 true
             });
         }
@@ -157,45 +165,22 @@ impl ModelStreamProjector {
         });
     }
 
-    fn append_response(&self, text: &str, reasoning: bool) {
-        if text.is_empty() {
-            return;
-        }
-        self.sender.send_modify(|state| {
-            let response = state
-                .responses
-                .entry(self.invocation_id.clone())
-                .or_insert_with(|| AgentRunLiveResponse {
-                    generation: self.generation,
-                    invocation_exit_policy: self.invocation_exit_policy,
-                    text: String::new(),
-                    reasoning: String::new(),
-                    tool_ids: self.tool_ids.clone(),
-                });
-            if reasoning {
-                response.reasoning.push_str(text);
-            } else {
-                response.text.push_str(text);
-            }
-        });
-    }
-
-    pub(super) fn clear_response(&self) {
+    pub(super) fn clear_reasoning(&self) {
         self.sender.send_if_modified(|state| {
             if state
-                .responses
+                .reasoning
                 .get(&self.invocation_id)
                 .map(|reasoning| reasoning.generation)
                 != Some(self.generation)
             {
                 return false;
             }
-            state.responses.remove(&self.invocation_id).is_some()
+            state.reasoning.remove(&self.invocation_id).is_some()
         });
     }
 
     pub(super) fn clear(&self) {
-        self.clear_response();
+        self.clear_reasoning();
         let invocation_id = self.invocation_id.as_str();
         let generation = self.generation;
         self.sender.send_if_modified(|state| {
@@ -244,7 +229,7 @@ pub(super) fn clear_live_invocation(
     invocation_id: &str,
 ) {
     sender.send_if_modified(|state| {
-        let removed_reasoning = state.responses.remove(invocation_id).is_some();
+        let removed_reasoning = state.reasoning.remove(invocation_id).is_some();
         let before = state.calls.len();
         state
             .calls
@@ -688,11 +673,11 @@ mod tests {
                 arguments_fragment: String::new(),
             });
         }
-        assert!(receiver.borrow().responses.is_empty());
+        assert!(receiver.borrow().reasoning.is_empty());
         projector.observe(AgentModelStreamDelta::Reasoning {
             text: "plan".to_string(),
         });
-        assert_eq!(receiver.borrow().responses["inv"].tool_ids, tools);
+        assert_eq!(receiver.borrow().reasoning["inv"].tool_ids, tools);
     }
 
     #[test]
@@ -714,9 +699,6 @@ mod tests {
             sender.clone(),
         );
         for projector in [&mut first, &mut sibling] {
-            projector.observe(AgentModelStreamDelta::Text {
-                text: "答复😀".to_string(),
-            });
             projector.observe(AgentModelStreamDelta::Reasoning {
                 text: "Plan ".to_string(),
             });
@@ -730,8 +712,7 @@ mod tests {
             });
         }
 
-        assert_eq!(receiver.borrow().responses["inv_a"].reasoning, "Plan now");
-        assert_eq!(receiver.borrow().responses["inv_a"].text, "答复😀");
+        assert_eq!(receiver.borrow().reasoning["inv_a"].text, "Plan now");
         let read = AgentModelStreamDelta::ToolCall {
             tool_call_index: 1,
             tool_id: ToolId::builtin("workspace.read_file").unwrap(),
@@ -739,7 +720,7 @@ mod tests {
         };
         first.observe(read);
         assert_eq!(
-            receiver.borrow().responses["inv_a"].tool_ids,
+            receiver.borrow().reasoning["inv_a"].tool_ids,
             [
                 ToolId::builtin(WORKSPACE_WRITE_FILE).unwrap(),
                 ToolId::builtin("workspace.read_file").unwrap()
@@ -747,8 +728,8 @@ mod tests {
         );
 
         first.clear();
-        assert!(!receiver.borrow().responses.contains_key("inv_a"));
-        assert_eq!(receiver.borrow().responses["inv_b"].reasoning, "Plan now");
+        assert!(!receiver.borrow().reasoning.contains_key("inv_a"));
+        assert_eq!(receiver.borrow().reasoning["inv_b"].text, "Plan now");
         assert_eq!(receiver.borrow().calls.len(), 1);
         assert!(
             receiver
@@ -775,9 +756,9 @@ mod tests {
         });
         first.clear();
         let state = receiver.borrow();
-        assert_eq!(state.responses["inv_a"].reasoning, "Retry");
+        assert_eq!(state.reasoning["inv_a"].text, "Retry");
         assert_eq!(
-            state.responses["inv_a"].tool_ids,
+            state.reasoning["inv_a"].tool_ids,
             [ToolId::builtin(WORKSPACE_WRITE_FILE).unwrap()]
         );
         assert_eq!(state.calls.len(), 2);
@@ -788,11 +769,11 @@ mod tests {
         );
         drop(state);
 
-        retry.clear_response();
-        assert!(!receiver.borrow().responses.contains_key("inv_a"));
+        retry.clear_reasoning();
+        assert!(!receiver.borrow().reasoning.contains_key("inv_a"));
         assert_eq!(receiver.borrow().calls.len(), 2);
         clear_live_invocation(&sender, "inv_b");
-        assert!(receiver.borrow().responses.is_empty());
+        assert!(receiver.borrow().reasoning.is_empty());
         assert_eq!(receiver.borrow().calls.len(), 1);
         remove_live_tool_call(&sender, "inv_a", 0);
         assert!(receiver.borrow().calls.is_empty());

@@ -10,13 +10,11 @@ import { createRspackConfigs } from '../rspack.config.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const frontendRoot = path.resolve(__dirname, '..', 'src');
-const tauriConfigPath = path.resolve(__dirname, '..', 'src-tauri', 'crates', 'tauritavern', 'tauri.conf.json');
-const devUrl = new URL(JSON.parse(fs.readFileSync(tauriConfigPath, 'utf8')).build.devUrl);
-const port = Number(devUrl.port);
+const port = 1430;
 const reloadPath = '/__tauritavern_dev_reload';
 const reloadHost = process.env.TAURI_DEV_HOST || 'localhost';
 const reloadUrl = `http://${formatUrlHost(reloadHost)}:${port}${reloadPath}`;
-const devServiceWorkerBootstrap = `<script src="/dev-sw-bootstrap.js" data-dev-server-origin="${devUrl.origin}"></script>`;
+const devServiceWorkerBootstrap = '<script src="/dev-sw-bootstrap.js"></script>';
 const rspackConfigs = createRspackConfigs('development');
 const bundleOutputRoots = rspackConfigs.map(config => config.output.path);
 
@@ -89,7 +87,7 @@ function contentType(filePath) {
 
 function isReloadEntryDocument(filePath) {
     const relativePath = path.relative(frontendRoot, filePath).split(path.sep).join('/');
-    return relativePath === 'index.html';
+    return relativePath === 'index.html' || relativePath === 'login.html';
 }
 
 async function resolveStaticFile(requestUrl) {
@@ -355,7 +353,7 @@ async function main() {
         throw error;
     }
     server.listen(port, () => {
-        console.log(`TauriTavern frontend dev server listening on ${devUrl.origin}`);
+        console.log(`TauriTavern frontend dev server listening on http://localhost:${port}`);
         console.log(`TauriTavern reload endpoint advertised as ${reloadUrl}`);
     });
 }

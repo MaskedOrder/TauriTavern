@@ -1,4 +1,3 @@
-import { installHostIdentity, HOSTS } from './helpers/host-identity.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
@@ -9,6 +8,7 @@ let invokedCommand;
 let invokedArgs;
 
 global.window = {
+    __TAURI_RUNNING__: true,
     __TAURI__: {
         core: {
             invoke: async (command, args) => {
@@ -25,9 +25,9 @@ const compatPath = path.join(
 );
 const { installMobileRuntimeCompat } = await import(pathToFileURL(compatPath).href);
 
-function createTargetWindow(clipboard) {
+function createTargetWindow(userAgent, clipboard) {
     return {
-        navigator: { clipboard },
+        navigator: { userAgent, clipboard },
         Array,
         String,
         Object,
@@ -36,11 +36,18 @@ function createTargetWindow(clipboard) {
     };
 }
 
+function setRuntimeUserAgent(userAgent) {
+    Object.defineProperty(globalThis, 'navigator', {
+        value: { userAgent },
+        configurable: true,
+    });
+}
+
 test('Android Web Clipboard writes through the native writer without replacing other methods', async () => {
-    installHostIdentity(HOSTS.android);
+    setRuntimeUserAgent('Mozilla/5.0 (Linux; Android 15)');
     const readText = async () => 'existing';
     const clipboard = { readText, writeText: async () => assert.fail('used Web Clipboard') };
-    const targetWindow = createTargetWindow(clipboard);
+    const targetWindow = createTargetWindow('Mozilla/5.0 (Linux; Android 15)', clipboard);
 
     installMobileRuntimeCompat(targetWindow);
     await targetWindow.navigator.clipboard.writeText(42);
@@ -51,9 +58,9 @@ test('Android Web Clipboard writes through the native writer without replacing o
 });
 
 test('non-Android Web Clipboard is left unchanged', () => {
-    installHostIdentity(HOSTS.ios);
+    setRuntimeUserAgent('Mozilla/5.0 (iPhone)');
     const writeText = async () => {};
-    const targetWindow = createTargetWindow({ writeText });
+    const targetWindow = createTargetWindow('Mozilla/5.0 (iPhone)', { writeText });
 
     installMobileRuntimeCompat(targetWindow);
 

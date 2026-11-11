@@ -11,13 +11,6 @@ use crate::errors::DomainError;
 const TOOL_ID_SEPARATOR: char = ':';
 const BUILTIN_TOOL_PROVIDER_ID: &str = "builtin";
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum AgentToolScope {
-    Chat,
-    Session,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ToolProviderId(String);
 
@@ -123,24 +116,6 @@ impl ToolId {
 
     pub fn is_builtin(&self) -> bool {
         self.provider_id() == BUILTIN_TOOL_PROVIDER_ID
-    }
-
-    pub fn extension(extension_id: &str, name: &str) -> Result<Self, DomainError> {
-        if extension_id.trim().is_empty() || name.trim().is_empty() {
-            return Err(DomainError::InvalidData(
-                "extension.tool_identity_required: extensionId and name are required".into(),
-            ));
-        }
-        Self::new(
-            &ToolProviderId::parse(format!("extension/{extension_id}"))?,
-            name,
-        )
-    }
-
-    pub fn extension_id(&self) -> Option<&str> {
-        self.provider_id()
-            .strip_prefix("extension/")
-            .filter(|id| !id.trim().is_empty())
     }
 
     pub fn as_str(&self) -> &str {
@@ -289,12 +264,15 @@ impl<'de> Deserialize<'de> for ToolSnapshotId {
 pub struct ToolBinding {
     descriptor: ToolDescriptor,
     model_alias: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_calls: Option<usize>,
 }
 
 impl ToolBinding {
     pub fn new(
         descriptor: ToolDescriptor,
         model_alias: impl Into<String>,
+        max_calls: Option<usize>,
     ) -> Result<Self, DomainError> {
         let model_alias = model_alias.into();
         if model_alias.is_empty() {
@@ -303,9 +281,16 @@ impl ToolBinding {
                 descriptor.id
             )));
         }
+        if max_calls == Some(0) {
+            return Err(DomainError::InvalidData(format!(
+                "tool.snapshot_tool_budget_invalid: tool `{}` max calls must be greater than zero",
+                descriptor.id
+            )));
+        }
         Ok(Self {
             descriptor,
             model_alias,
+            max_calls,
         })
     }
 
@@ -320,6 +305,10 @@ impl ToolBinding {
     pub fn model_alias(&self) -> &str {
         &self.model_alias
     }
+
+    pub fn max_calls(&self) -> Option<usize> {
+        self.max_calls
+    }
 }
 
 impl<'de> Deserialize<'de> for ToolBinding {
@@ -332,10 +321,12 @@ impl<'de> Deserialize<'de> for ToolBinding {
         struct Binding {
             descriptor: ToolDescriptor,
             model_alias: String,
+            max_calls: Option<usize>,
         }
 
         let binding = Binding::deserialize(deserializer)?;
-        Self::new(binding.descriptor, binding.model_alias).map_err(de::Error::custom)
+        Self::new(binding.descriptor, binding.model_alias, binding.max_calls)
+            .map_err(de::Error::custom)
     }
 }
 
@@ -345,12 +336,24 @@ pub struct InvocationToolSnapshot {
     schema_version: u32,
     id: ToolSnapshotId,
     bindings: Vec<ToolBinding>,
+    max_calls_per_invocation: usize,
 }
 
 impl InvocationToolSnapshot {
     pub const SCHEMA_VERSION: u32 = 1;
 
-    pub fn try_new(id: ToolSnapshotId, bindings: Vec<ToolBinding>) -> Result<Self, DomainError> {
+    pub fn try_new(
+        id: ToolSnapshotId,
+        bindings: Vec<ToolBinding>,
+        max_calls_per_invocation: usize,
+    ) -> Result<Self, DomainError> {
+        if max_calls_per_invocation == 0 {
+            return Err(DomainError::InvalidData(
+                "tool.snapshot_budget_invalid: max calls per invocation must be greater than zero"
+                    .to_string(),
+            ));
+        }
+
         let mut tool_ids = HashSet::with_capacity(bindings.len());
         let mut aliases = HashSet::with_capacity(bindings.len());
         for binding in &bindings {
@@ -372,6 +375,7 @@ impl InvocationToolSnapshot {
             schema_version: Self::SCHEMA_VERSION,
             id,
             bindings,
+            max_calls_per_invocation,
         })
     }
 
@@ -381,6 +385,10 @@ impl InvocationToolSnapshot {
 
     pub fn bindings(&self) -> &[ToolBinding] {
         &self.bindings
+    }
+
+    pub fn max_calls_per_invocation(&self) -> usize {
+        self.max_calls_per_invocation
     }
 
     pub fn binding(&self, tool_id: &ToolId) -> Option<&ToolBinding> {
@@ -403,6 +411,7 @@ impl<'de> Deserialize<'de> for InvocationToolSnapshot {
             schema_version: u32,
             id: ToolSnapshotId,
             bindings: Vec<ToolBinding>,
+            max_calls_per_invocation: usize,
         }
 
         let snapshot = Snapshot::deserialize(deserializer)?;
@@ -412,7 +421,12 @@ impl<'de> Deserialize<'de> for InvocationToolSnapshot {
                 snapshot.schema_version
             )));
         }
-        Self::try_new(snapshot.id, snapshot.bindings).map_err(de::Error::custom)
+        Self::try_new(
+            snapshot.id,
+            snapshot.bindings,
+            snapshot.max_calls_per_invocation,
+        )
+        .map_err(de::Error::custom)
     }
 }
 
@@ -716,20 +730,27 @@ mod tests {
 
     #[test]
     fn snapshot_preserves_binding_order_and_rejects_duplicate_aliases() {
-        let first =
-            ToolBinding::new(descriptor(ToolId::builtin("first").unwrap()), "first_alias").unwrap();
+        let first = ToolBinding::new(
+            descriptor(ToolId::builtin("first").unwrap()),
+            "first_alias",
+            Some(2),
+        )
+        .unwrap();
         let second = ToolBinding::new(
             descriptor(ToolId::builtin("second").unwrap()),
             "second_alias",
+            None,
         )
         .unwrap();
         let snapshot = InvocationToolSnapshot::try_new(
             ToolSnapshotId::parse("inv_root").unwrap(),
             vec![second.clone(), first.clone()],
+            4,
         )
         .unwrap();
 
         assert_eq!(snapshot.bindings(), &[second, first.clone()]);
+        assert_eq!(snapshot.max_calls_per_invocation(), 4);
         assert_eq!(
             serde_json::to_value(&snapshot).unwrap()["bindings"][0]["modelAlias"],
             "second_alias"
@@ -738,11 +759,13 @@ mod tests {
         let duplicate = ToolBinding::new(
             descriptor(ToolId::builtin("third").unwrap()),
             "second_alias",
+            None,
         )
         .unwrap();
         let error = InvocationToolSnapshot::try_new(
             ToolSnapshotId::parse("duplicate").unwrap(),
             vec![snapshot.bindings()[0].clone(), duplicate],
+            4,
         )
         .unwrap_err();
         assert!(
@@ -752,6 +775,7 @@ mod tests {
         let error = InvocationToolSnapshot::try_new(
             ToolSnapshotId::parse("duplicate-id").unwrap(),
             vec![first.clone(), first],
+            4,
         )
         .unwrap_err();
         assert!(
@@ -764,9 +788,16 @@ mod tests {
         let snapshot = InvocationToolSnapshot::try_new(
             ToolSnapshotId::parse("inv_root").unwrap(),
             vec![
-                ToolBinding::new(descriptor(ToolId::builtin("read").unwrap()), "read").unwrap(),
-                ToolBinding::new(descriptor(ToolId::builtin("write").unwrap()), "write").unwrap(),
+                ToolBinding::new(
+                    descriptor(ToolId::builtin("read").unwrap()),
+                    "read",
+                    Some(2),
+                )
+                .unwrap(),
+                ToolBinding::new(descriptor(ToolId::builtin("write").unwrap()), "write", None)
+                    .unwrap(),
             ],
+            4,
         )
         .unwrap();
         let serialized = serde_json::to_value(&snapshot).unwrap();
@@ -778,7 +809,9 @@ mod tests {
         for (path, value) in [
             ("/schemaVersion", json!(2)),
             ("/id", json!("")),
+            ("/maxCallsPerInvocation", json!(0)),
             ("/bindings/0/modelAlias", json!("")),
+            ("/bindings/0/maxCalls", json!(0)),
             ("/bindings/1/modelAlias", json!("read")),
             ("/bindings/1/descriptor/id", json!("builtin:read")),
         ] {
@@ -798,9 +831,10 @@ mod tests {
         let snapshot = InvocationToolSnapshot::try_new(
             ToolSnapshotId::parse("inv_root").unwrap(),
             vec![
-                ToolBinding::new(descriptor(first_id.clone()), "first").unwrap(),
-                ToolBinding::new(descriptor(second_id.clone()), "second").unwrap(),
+                ToolBinding::new(descriptor(first_id.clone()), "first", None).unwrap(),
+                ToolBinding::new(descriptor(second_id.clone()), "second", None).unwrap(),
             ],
+            4,
         )
         .unwrap();
 
@@ -822,7 +856,7 @@ mod tests {
         assert!(ToolTurnContract::all(&snapshot, ToolChoice::Specific(unknown)).is_err());
 
         let empty =
-            InvocationToolSnapshot::try_new(ToolSnapshotId::parse("empty").unwrap(), Vec::new())
+            InvocationToolSnapshot::try_new(ToolSnapshotId::parse("empty").unwrap(), Vec::new(), 4)
                 .unwrap();
         assert!(ToolTurnContract::all(&empty, ToolChoice::Required).is_err());
     }

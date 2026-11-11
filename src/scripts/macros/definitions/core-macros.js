@@ -1,5 +1,7 @@
 import { seedrandom, droll } from '../../../lib.js';
+import { chat_metadata, main_api, getMaxPromptTokens, getMaxContextTokens, getMaxResponseTokens, extension_prompts, getCurrentChatId } from '../../../script.js';
 import { getStringHash, isFalseBoolean } from '../../utils.js';
+import { textgenerationwebui_banned_in_macros } from '../../textgen-settings.js';
 import { inject_ids } from '../../constants.js';
 import { MacroRegistry, MacroCategory, MacroValueType } from '../engine/MacroRegistry.js';
 import { MACRO_VARIABLE_SHORTHAND_PATTERN } from '../engine/MacroLexer.js';
@@ -227,7 +229,7 @@ export function registerCoreMacros() {
         category: MacroCategory.UTILITY,
         description: 'Current text from the send textarea.',
         returns: 'Current text from the send textarea.',
-        handler: ({ env }) => env.state.input,
+        handler: () => (/** @type {HTMLTextAreaElement} */(document.querySelector('#send_textarea')))?.value ?? '',
     });
 
     // {{maxPrompt}} -> max context size (context minus response)
@@ -237,7 +239,7 @@ export function registerCoreMacros() {
         description: 'Maximum prompt context size.',
         returns: 'Maximum prompt context size.',
         returnType: MacroValueType.INTEGER,
-        handler: ({ env }) => String(env.system.maxPrompt),
+        handler: () => String(getMaxPromptTokens()),
     });
 
     // {{maxContext}} -> max context token limit
@@ -247,7 +249,7 @@ export function registerCoreMacros() {
         description: 'Maximum context token limit.',
         returns: 'Maximum context token limit.',
         returnType: MacroValueType.INTEGER,
-        handler: ({ env }) => String(env.system.maxContext),
+        handler: () => String(getMaxContextTokens()),
     });
 
     // {{maxResponse}} -> max response token limit
@@ -257,7 +259,7 @@ export function registerCoreMacros() {
         description: 'Maximum response token limit.',
         returns: 'Maximum response token limit.',
         returnType: MacroValueType.INTEGER,
-        handler: ({ env }) => String(env.system.maxResponse),
+        handler: () => String(getMaxResponseTokens()),
     });
 
     // String utilities
@@ -287,6 +289,8 @@ export function registerCoreMacros() {
                 description: 'Any kind of text as comment. If you want multiline comments, consider using a scoped macro like {{//}}First\nSecond{{///}}.',
             },
         ],
+        list: true,         // We consume any arguments as if this is a list, but we'll ignore them in the handler anyway
+        strictArgs: false,  // and we also always remove it, even if the parsing might say it's invalid
         description: 'Comment macro that produces an empty string. Can be used for writing into prompt definitions, without being passed to the context.',
         returns: '',
         displayOverride: '{{// ...}}',
@@ -381,7 +385,7 @@ export function registerCoreMacros() {
             // When changing the hashing logic, make sure to update unit test functionality
             // in registerTestablePick() to be identical.
 
-            const chatIdHash = env.chat.idHash;
+            const chatIdHash = getChatIdHash();
 
             // Use the full original input string for deterministic behavior
             const rawContentHash = env.contentHash;
@@ -392,7 +396,7 @@ export function registerCoreMacros() {
             const offset = globalOffset;
 
             // Reroll seed allows users to reset all picks in the chat via /reroll-pick command
-            const rerollSeed = env.chat.pickRerollSeed || null;
+            const rerollSeed = chat_metadata.pick_reroll_seed || null;
 
             const combinedSeedString = [chatIdHash, rawContentHash, offset, rerollSeed].filter(it => it !== null).join('-');
             const finalSeed = getStringHash(combinedSeedString);
@@ -431,12 +435,12 @@ export function registerCoreMacros() {
         description: 'Bans a word for Text Completion backend. (Strips quotes surrounding the banned word, if present)',
         returns: '',
         exampleUsage: ['{{banned::delve}}'],
-        handler: ({ env, unnamedArgs: [bannedWord] }) => {
+        handler: ({ unnamedArgs: [bannedWord] }) => {
             // Strip quotes via regex, which were allowed in legacy syntax
             bannedWord = bannedWord.replace(/^"|"$/g, '');
-            if (env.system.api === 'textgenerationwebui') {
+            if (main_api === 'textgenerationwebui') {
                 console.log('Found banned word in macros: ' + bannedWord);
-                env.bannedWords.push(bannedWord);
+                textgenerationwebui_banned_in_macros.push(bannedWord);
             }
             return '';
         },
@@ -456,10 +460,22 @@ export function registerCoreMacros() {
         description: 'Returns the world info outlet prompt for a given outlet key.',
         returns: 'World info outlet prompt.',
         exampleUsage: ['{{outlet::character-achievements}}'],
-        handler: ({ env, unnamedArgs: [outlet] }) => {
+        handler: ({ unnamedArgs: [outlet] }) => {
             if (!outlet) return '';
-            const value = env.extensionPrompts[inject_ids.CUSTOM_WI_OUTLET(outlet)]?.value;
+            const value = extension_prompts[inject_ids.CUSTOM_WI_OUTLET(outlet)]?.value;
             return value || '';
         },
     });
+}
+
+function getChatIdHash() {
+    const cachedIdHash = chat_metadata.chat_id_hash;
+    if (typeof cachedIdHash === 'number') {
+        return cachedIdHash;
+    }
+
+    const chatId = chat_metadata.main_chat ?? getCurrentChatId();
+    const chatIdHash = getStringHash(chatId);
+    chat_metadata.chat_id_hash = chatIdHash;
+    return chatIdHash;
 }

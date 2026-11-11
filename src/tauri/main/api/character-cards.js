@@ -1,7 +1,6 @@
 // @ts-check
 
-import { createFileStagingService } from '../services/files/file-staging-service.js';
-import { characterStemFromAvatarFileName } from '../services/characters/character-identity.js';
+import { isAndroidRuntime, isIosRuntime } from '../../../scripts/util/mobile-runtime.js';
 
 const CHARACTER_CARD_EXTENSIONS = ['json', 'png'];
 const CHARACTER_CARD_EXTENSION_SET = new Set(CHARACTER_CARD_EXTENSIONS);
@@ -10,15 +9,6 @@ const CHARACTER_CARD_MIME_BY_EXTENSION = new Map([
     ['png', 'image/png'],
 ]);
 
-export class LorebookAdoptionConflictError extends Error {
-    /** @param {string} message */
-    constructor(message) {
-        super(message);
-        this.name = 'LorebookAdoptionConflictError';
-    }
-}
-
-/** @param {unknown} value @param {string} label */
 function requireNonEmptyString(value, label) {
     const normalized = String(value ?? '').trim();
     if (!normalized) {
@@ -27,7 +17,6 @@ function requireNonEmptyString(value, label) {
     return normalized;
 }
 
-/** @param {string} fileName */
 function characterCardExtension(fileName) {
     const match = String(fileName || '').match(/\.([^.]+)$/);
     const extension = match?.[1]?.toLowerCase() || '';
@@ -37,83 +26,137 @@ function characterCardExtension(fileName) {
     return extension;
 }
 
+function fileNameFromPath(filePath) {
+    const value = requireNonEmptyString(filePath, 'character card file path');
+    const path = value.startsWith('file://') ? decodeURIComponent(new URL(value).pathname) : value;
+    const name = path.replace(/\\/g, '/').split('/').filter(Boolean).pop();
+    return requireNonEmptyString(name, 'character card file name');
+}
+
+function normalizeDialogSelection(value) {
+    if (value === null || value === undefined) {
+        return null;
+    }
+
+    const values = Array.isArray(value) ? value : [value];
+    return values.map(path => requireNonEmptyString(path, 'selected character card path'));
+}
+
 /**
  * @param {{
  *   safeInvoke: (command: string, args?: any) => Promise<any>;
- *   invalidateCharacterCache: () => void;
  *   createReadableFileStream: (filePath: string) => ReadableStream<Uint8Array> | Promise<ReadableStream<Uint8Array>>;
+ *   removeTemporaryFile?: (filePath: string) => Promise<void>;
  * }} deps
  */
 function createCharacterCardsApi({
     safeInvoke,
-    invalidateCharacterCache,
     createReadableFileStream,
+    removeTemporaryFile,
 }) {
     if (typeof safeInvoke !== 'function') {
         throw new Error('Tauri main context safeInvoke is missing');
-    }
-    if (typeof invalidateCharacterCache !== 'function') {
-        throw new Error('Tauri main context invalidateCharacterCache is missing');
     }
     if (typeof createReadableFileStream !== 'function') {
         throw new Error('Tauri readable file stream service is missing');
     }
 
-    const staging = createFileStagingService({ safeInvoke });
-
-    /** @param {string} filePath @param {string} preferredName */
-    async function fileFromPath(filePath, preferredName) {
-        const fileName = requireNonEmptyString(preferredName, 'character card file name');
+    async function fileFromPath(filePath, preferredName = '') {
+        const fileName = preferredName ? requireNonEmptyString(preferredName, 'character card file name') : fileNameFromPath(filePath);
         const extension = characterCardExtension(fileName);
         const type = CHARACTER_CARD_MIME_BY_EXTENSION.get(extension) || 'application/octet-stream';
         const stream = await createReadableFileStream(filePath);
-        return new File([await new Response(stream).blob()], fileName, { type });
-    }
+        const reader = stream.getReader();
+        const chunks = [];
 
-    async function pickFiles({ multiple = false } = {}) {
-        const selected = await safeInvoke('pick_import_files', { kind: 'character-card', multiple });
-        if (selected === null) return null;
         try {
-            const files = [];
-            for (const { path, name } of selected) files.push(await fileFromPath(path, name));
-            return files;
-        } finally {
-            for (const { path } of selected) await staging.discardFile(path);
-        }
-    }
-
-    /** @param {string} avatar */
-    async function adoptLorebook(avatar) {
-        const name = characterStemFromAvatarFileName(avatar, 'avatar', { required: true });
-        const result = await safeInvoke('adopt_character_lorebook', { dto: { name } });
-        invalidateCharacterCache();
-        return result;
-    }
-
-    /**
-     * @param {string} avatar
-     * @param {'adopt' | 'update'} choice
-     * @param {string} token
-     */
-    async function resolveLorebookAdoption(avatar, choice, token) {
-        const name = characterStemFromAvatarFileName(avatar, 'avatar', { required: true });
-        try {
-            const result = await safeInvoke('resolve_character_lorebook_adoption', { dto: { name, choice, token } });
-            invalidateCharacterCache();
-            return result;
-        } catch (error) {
-            if (error instanceof Error && error.message.startsWith('Conflict:')) {
-                throw new LorebookAdoptionConflictError(error.message);
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done) {
+                    break;
+                }
+                if (value) {
+                    chunks.push(value);
+                }
             }
-            throw error;
+        } finally {
+            reader.releaseLock();
         }
+
+        return new File(chunks, fileName, { type });
+    }
+
+    function isNativePickerAvailable() {
+        return !isAndroidRuntime();
+    }
+
+    async function cleanupIosPickedFile(filePath) {
+        try {
+            await removeTemporaryFile(filePath);
+        } catch (error) {
+            console.warn('Failed to cleanup iOS character card staging file:', error);
+        }
+    }
+
+    async function pickIosFile() {
+        if (typeof removeTemporaryFile !== 'function') {
+            throw new Error('iOS character card picker cleanup is unavailable');
+        }
+
+        const result = await safeInvoke('ios_pick_character_card');
+        if (result?.cancelled) {
+            return null;
+        }
+
+        const filePath = requireNonEmptyString(result?.filePath ?? result?.file_path, 'iOS character card file path');
+        const fileName = requireNonEmptyString(result?.fileName ?? result?.file_name, 'iOS character card file name');
+        try {
+            return [await fileFromPath(filePath, fileName)];
+        } finally {
+            await cleanupIosPickedFile(filePath);
+        }
+    }
+
+    async function pickDesktopFiles({ multiple = false, title = 'Import Character Card' } = {}) {
+        const selectedPaths = normalizeDialogSelection(await safeInvoke('plugin:dialog|open', {
+            options: {
+                title,
+                multiple: Boolean(multiple),
+                directory: false,
+                filters: [
+                    {
+                        name: 'Character Card',
+                        extensions: CHARACTER_CARD_EXTENSIONS,
+                    },
+                ],
+            },
+        }));
+
+        if (!selectedPaths) {
+            return null;
+        }
+
+        return Promise.all(selectedPaths.map(path => fileFromPath(path)));
+    }
+
+    async function pickFiles(options = {}) {
+        if (!isNativePickerAvailable()) {
+            return null;
+        }
+
+        if (isIosRuntime()) {
+            if (options?.multiple) {
+                throw new Error('iOS character card picker does not support multiple selection yet');
+            }
+            return pickIosFile();
+        }
+
+        return pickDesktopFiles(options);
     }
 
     return {
-        isNativePickerAvailable: () => true,
+        isNativePickerAvailable,
         pickFiles,
-        adoptLorebook,
-        resolveLorebookAdoption,
     };
 }
 
@@ -133,7 +176,7 @@ export function installCharacterCardsApi(context) {
 
     hostAbi.api.characterCards = createCharacterCardsApi({
         safeInvoke: context?.safeInvoke,
-        invalidateCharacterCache: context?.invalidateCharacterCache,
         createReadableFileStream: context?.createReadableFileStream,
+        removeTemporaryFile: context?.removeTemporaryFile,
     });
 }

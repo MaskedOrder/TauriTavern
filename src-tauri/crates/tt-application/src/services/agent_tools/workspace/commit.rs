@@ -2,13 +2,14 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 use super::args::{
-    ensure_visible_workspace_path, parse_workspace_path, required_trimmed_string_arg,
+    ensure_visible_workspace_path, parse_workspace_path, required_trimmed_string_arg, tool_error,
 };
+use super::policy::workspace_access_policy;
 use crate::errors::ApplicationError;
-use crate::services::agent_workspace_scope::ScopedWorkspaceFs;
 use tt_domain::models::agent::profile::ResolvedAgentProfile;
 use tt_domain::models::agent::{AgentChatCommitMode, AgentToolResult};
 use tt_domain::models::tool::ToolInvocation;
+use tt_ports::repositories::workspace_repository::WorkspaceRepository;
 
 use super::super::dispatcher::AgentToolEffect;
 use super::super::structured::structured_value;
@@ -22,22 +23,20 @@ struct WorkspaceCommitStructured<'a> {
 }
 
 pub(in crate::services::agent_tools) async fn commit(
-    workspace: &ScopedWorkspaceFs,
+    workspace_repository: &dyn WorkspaceRepository,
+    run_id: &str,
     call: &ToolInvocation,
     args: &Map<String, Value>,
     profile: &ResolvedAgentProfile,
 ) -> Result<(AgentToolResult, AgentToolEffect), ApplicationError> {
-    let policy = &workspace.policy;
-    let path = required_trimmed_string_arg(args, "path").unwrap_or(
-        crate::services::agent_profile_service::require_output(profile)?
-            .message_body_path
-            .as_str(),
-    );
+    let policy = workspace_access_policy(workspace_repository, run_id).await?;
+    let path = required_trimmed_string_arg(args, "path")
+        .unwrap_or(profile.output.message_body_path.as_str());
     let path = match parse_workspace_path(path) {
         Ok(path) => path,
         Err(error) => return Ok((error.into_tool_result(call), AgentToolEffect::None)),
     };
-    if let Err(error) = ensure_visible_workspace_path(policy, &path) {
+    if let Err(error) = ensure_visible_workspace_path(&policy, &path) {
         return Ok((error.into_tool_result(call), AgentToolEffect::None));
     }
 
@@ -46,7 +45,7 @@ pub(in crate::services::agent_tools) async fn commit(
         Some("replace") | None => AgentChatCommitMode::Replace,
         Some(other) => {
             return Ok((
-                AgentToolResult::error(
+                tool_error(
                     call,
                     "workspace.commit_mode_invalid",
                     &format!("mode must be `replace` or `append`, got `{other}`"),
@@ -57,22 +56,24 @@ pub(in crate::services::agent_tools) async fn commit(
     };
     let reason = required_trimmed_string_arg(args, "reason").map(str::to_string);
 
-    let mut result = AgentToolResult::ok(
-        call,
-        format!(
-            "Requested chat commit of {} with mode {:?}.",
-            path.as_str(),
-            mode
-        ),
-        structured_value(WorkspaceCommitStructured {
-            path: path.as_str(),
-            mode,
-            reason: reason.as_deref(),
-        }),
-    );
-    result.resource_refs = vec![path.as_str().to_string()];
     Ok((
-        result,
+        AgentToolResult {
+            call_id: call.call_id.clone(),
+            tool_id: call.tool_id.clone(),
+            content: format!(
+                "Requested chat commit of {} with mode {:?}.",
+                path.as_str(),
+                mode
+            ),
+            structured: structured_value(WorkspaceCommitStructured {
+                path: path.as_str(),
+                mode,
+                reason: reason.as_deref(),
+            }),
+            is_error: false,
+            error_code: None,
+            resource_refs: vec![path.as_str().to_string()],
+        },
         AgentToolEffect::ChatCommitRequested { path, mode, reason },
     ))
 }

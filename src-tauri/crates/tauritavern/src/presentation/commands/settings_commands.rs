@@ -4,17 +4,15 @@ use tauri::State;
 
 use crate::app::AppState;
 use crate::app::dev_observability::DevObservabilityHub;
-use crate::presentation::commands::chunk_body::{chunk_bytes_from_request, commit_headers};
 use crate::presentation::commands::helpers::{
     ensure_ios_policy_allows, log_command, map_command_error,
 };
 use crate::presentation::errors::CommandError;
 use tt_application::dto::settings_dto::{
-    SettingsSnapshotDto, TauriTavernSettingsDto, UpdateTauriTavernSettingsDto, UserSettingsDto,
-    UserSettingsRevisionDto, UserSettingsSaveResultDto,
+    SettingsSnapshotDto, SillyTavernSettingsResponseDto, TauriTavernSettingsDto,
+    UpdateTauriTavernSettingsDto, UserSettingsDto, UserSettingsPatchDto, UserSettingsSaveResultDto,
 };
 use tt_application::services::host_resource_service::HostResourceService;
-use tt_contracts::byte_commit::CommitBegin;
 use tt_contracts::chat::ChatBackupStorageStats;
 
 #[tauri::command]
@@ -140,71 +138,47 @@ pub async fn update_tauritavern_settings(
 }
 
 #[tauri::command]
-pub async fn begin_settings_commit(
-    expected_revision: Option<UserSettingsRevisionDto>,
-    app_state: State<'_, Arc<AppState>>,
-) -> Result<CommitBegin, CommandError> {
-    app_state
-        .services
-        .settings_service
-        .begin_commit(expected_revision)
-        .await
-        .map_err(Into::into)
-}
-
-#[tauri::command]
-pub async fn append_settings_commit_chunk(
-    request: tauri::ipc::Request<'_>,
-    app_state: State<'_, Arc<AppState>>,
-) -> Result<u64, CommandError> {
-    let (session_id, offset) = commit_headers(&request)?;
-    let bytes = chunk_bytes_from_request(&request)?;
-    app_state
-        .services
-        .settings_service
-        .append_commit(session_id, offset, &bytes)
-        .await
-        .map_err(Into::into)
-}
-
-#[tauri::command]
-pub async fn finish_settings_commit(
-    session_id: String,
-    expected_size: u64,
+pub async fn save_user_settings(
+    settings: UserSettingsDto,
     app_state: State<'_, Arc<AppState>>,
 ) -> Result<UserSettingsSaveResultDto, CommandError> {
+    log_command("save_user_settings");
+
     app_state
         .services
         .settings_service
-        .finish_commit(&session_id, expected_size)
+        .save_user_settings(settings)
         .await
-        .map_err(Into::into)
+        .map_err(map_command_error("Failed to save user settings"))
 }
 
 #[tauri::command]
-pub async fn abort_settings_commit(
-    session_id: String,
+pub async fn save_user_settings_patch(
+    patch: UserSettingsPatchDto,
     app_state: State<'_, Arc<AppState>>,
-) -> Result<(), CommandError> {
+) -> Result<UserSettingsSaveResultDto, CommandError> {
+    log_command("save_user_settings_patch");
+
     app_state
         .services
         .settings_service
-        .abort_commit(&session_id)
+        .save_user_settings_patch(patch)
         .await
-        .map_err(Into::into)
+        .map_err(map_command_error("Failed to save user settings patch"))
 }
 
 #[tauri::command]
 pub async fn get_sillytavern_settings(
     app_state: State<'_, Arc<AppState>>,
-) -> Result<tauri::ipc::Response, CommandError> {
-    let result = app_state
+) -> Result<SillyTavernSettingsResponseDto, CommandError> {
+    log_command("get_sillytavern_settings");
+
+    app_state
         .services
         .settings_service
         .get_sillytavern_settings()
         .await
-        .map_err(map_command_error("Failed to get SillyTavern settings"))?;
-    Ok(tauri::ipc::Response::new(result.bytes.to_vec()))
+        .map_err(map_command_error("Failed to get SillyTavern settings"))
 }
 
 #[tauri::command]

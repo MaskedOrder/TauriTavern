@@ -12,9 +12,8 @@ import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { SlashCommandScope } from './slash-commands/SlashCommandScope.js';
 import { renderTemplateAsync } from './templates.js';
 import { textgen_types } from './textgen-settings.js';
-import { hostPlatform } from './util/host-identity.js';
+import { isAndroidRuntime } from './util/mobile-runtime.js';
 import { copyText, isTrueBoolean } from './utils.js';
-import { toUserFacingErrorText } from './util/user-facing-error.js';
 
 export const SECRET_KEYS = {
     HORDE: 'api_key_horde',
@@ -321,7 +320,9 @@ async function viewSecrets() {
     });
 
     if (response.status == 403) {
-        const hint = t`To view your API keys here, enable Allow Keys Exposure in TauriTavern Settings and restart the app.`;
+        const hint = globalThis.__TAURI_RUNNING__ === true
+            ? t`To view your API keys here, enable Allow Keys Exposure in TauriTavern Settings and restart the app.`
+            : t`To view your API keys here, set the value of allowKeysExposure to true in config.yaml file and restart the SillyTavern server.`;
         await Popup.show.text(t`Forbidden`, hint);
         return;
     }
@@ -332,7 +333,6 @@ async function viewSecrets() {
 
     const data = await response.json();
     const table = document.createElement('table');
-    table.setAttribute('data-tt-sensitive', '');
     table.classList.add('responsiveTable');
     $(table).append('<thead><th>Key</th><th>Value</th></thead>');
 
@@ -363,56 +363,91 @@ export function primeSecretStateSnapshot(snapshot) {
  * @return {Promise<string?>} The ID of the newly created secret key, or null if no value is provided.
  */
 export async function writeSecret(key, value, label, { allowEmpty } = {}) {
-    if (!value && !allowEmpty) {
-        await deleteSecret(key);
+    try {
+        if (!value && !allowEmpty) {
+            console.warn(`No value provided for ${key} in writeSecret, redirecting to deleteSecret`);
+            await deleteSecret(key);
+            return null;
+        }
+
+        if (!label) {
+            label = getLabel();
+        }
+
+        const response = await fetch('/api/secrets/write', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ key, value, label }),
+        });
+
+        if (!response.ok) {
+            return null;
+        }
+
+        const { id } = await response.json();
+        // Clear the input field
+        $(INPUT_MAP[key]).val('').trigger('input');
+        await readSecretState();
+        await eventSource.emit(event_types.SECRET_WRITTEN, key);
+        return id;
+    } catch (error) {
+        console.error(`Could not write secret value: ${key}`, error);
         return null;
     }
-    const response = await requestSecret('write', { key, value, label: label || getLabel() }, t`Could not save API key`);
-    const { id } = await response.json();
-    // The key is persisted. A subsequent refresh failure must not cause a duplicate write on retry.
-    $(INPUT_MAP[key]).val('').trigger('input');
-    await readSecretState();
-    await eventSource.emit(event_types.SECRET_WRITTEN, key);
-    return id;
 }
 
-/** Delete the active key, or a specific saved key. Rejects on deletion or refresh failure. */
+/**
+ * Deletes a secret value from the server.
+ * @param {string} key Secret key
+ * @param {string} [id] (Optional) ID of the secret key to delete. If not provided, deletes an active key.
+ */
 export async function deleteSecret(key, id) {
-    await requestSecret('delete', { key, id }, t`Could not delete API key`);
-    await readSecretState();
-    $('#main_api').trigger('change');
-    await eventSource.emit(event_types.SECRET_DELETED, key);
+    try {
+        const response = await fetch('/api/secrets/delete', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ key, id }),
+        });
+
+        if (response.ok) {
+            await readSecretState();
+            // Force reconnection to the API with the new key
+            $('#main_api').trigger('change');
+            await eventSource.emit(event_types.SECRET_DELETED, key);
+        }
+    } catch (error) {
+        console.error(`Could not delete secret value: ${key}`, error);
+    }
 }
 
-/** Refresh the shared key metadata. Callers must not continue with old metadata after a failure. */
+/**
+ * Reads the current state of secrets from the server.
+ * @returns {Promise<void>}
+ */
 export async function readSecretState() {
     if (primedSecretState !== null) {
         secret_state = primedSecretState;
         primedSecretState = null;
-    } else {
-        const response = await requestSecret('read', undefined, t`Could not refresh API key state`);
-        secret_state = await response.json();
+        updateSecretDisplay();
+        updateInputDataLists();
+        await checkOpenRouterAuth();
+        return;
     }
-    updateSecretDisplay();
-    updateInputDataLists();
-}
 
-/** The secrets API shares one request/error boundary; each UI or script entry owns notification. */
-async function requestSecret(action, body, message) {
     try {
-        const response = await fetch(`/api/secrets/${action}`, {
+        const response = await fetch('/api/secrets/read', {
             method: 'POST',
-            headers: getRequestHeaders({ omitContentType: body === undefined }),
-            body: body === undefined ? undefined : JSON.stringify(body),
+            headers: getRequestHeaders({ omitContentType: true }),
         });
-        if (!response.ok) {
-            const detail = response.headers.get('content-type')?.includes('application/json')
-                ? await response.json() : await response.text();
-            throw new Error(toUserFacingErrorText(detail) || response.statusText);
+
+        if (response.ok) {
+            secret_state = await response.json();
+            updateSecretDisplay();
+            updateInputDataLists();
+            await checkOpenRouterAuth();
         }
-        return response;
-    } catch (error) {
-        throw new Error(`${message}: ${toUserFacingErrorText(error)}`, { cause: error });
+    } catch {
+        console.error('Could not read secrets file');
     }
 }
 
@@ -449,18 +484,50 @@ export async function findSecret(key, id) {
  * @returns {Promise<boolean>} Whether the secret was activated successfully
  */
 export async function rotateSecret(key, id) {
-    await requestSecret('rotate', { key, id }, t`Could not switch API key`);
-    await readSecretState();
-    $('#main_api').trigger('change');
-    await eventSource.emit(event_types.SECRET_ROTATED, key);
-    return true;
+    try {
+        const response = await fetch('/api/secrets/rotate', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ key, id }),
+        });
+
+        if (!response.ok) {
+            throw new Error(`Could not rotate secret value: HTTP ${response.status}`);
+        }
+
+        await readSecretState();
+        // Force reconnection to the API with the new key
+        $('#main_api').trigger('change');
+        await eventSource.emit(event_types.SECRET_ROTATED, key);
+        return true;
+    } catch (error) {
+        console.error(`Could not rotate secret value: ${key}`, error);
+        toastr.error(t`Failed to switch the API key. Please try again.`);
+        return false;
+    }
 }
 
-/** Rename a saved key. Rejects on rename or refresh failure. */
+/**
+ * Renames a secret value on the server.
+ * @param {string} key Secret key to rename
+ * @param {string} id ID of the secret to rename
+ * @param {string} label Label to rename the secret to
+ */
 export async function renameSecret(key, id, label) {
-    await requestSecret('rename', { key, id, label }, t`Could not rename API key`);
-    await readSecretState();
-    await eventSource.emit(event_types.SECRET_EDITED, key);
+    try {
+        const response = await fetch('/api/secrets/rename', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ key, id, label }),
+        });
+
+        if (response.ok) {
+            await readSecretState();
+            await eventSource.emit(event_types.SECRET_EDITED, key);
+        }
+    } catch (error) {
+        console.error(`Could not rename secret value: ${key}`, error);
+    }
 }
 
 /**
@@ -509,7 +576,7 @@ export async function checkOpenRouterAuth() {
                 throw new Error('OpenRouter token not saved');
             }
         } catch (err) {
-            toastr.error(toUserFacingErrorText(err));
+            toastr.error('Could not verify OpenRouter token. Please try again.');
             return;
         }
     }
@@ -519,7 +586,7 @@ export async function checkOpenRouterAuth() {
  * Updates the input data lists for secret keys for autocomplete functionality.
  */
 function updateInputDataLists() {
-    if (hostPlatform() === 'android') {
+    if (globalThis.__TAURI_RUNNING__ === true && isAndroidRuntime()) {
         for (const [key, inputSelector] of Object.entries(INPUT_MAP)) {
             const inputElements = document.querySelectorAll(inputSelector);
             if (inputElements.length === 0) {
@@ -608,12 +675,8 @@ async function openKeyManagerDialog(key) {
                 return;
             }
         }
-        try {
-            await writeSecret(key, value, label, { allowEmpty: true });
-            await renderSecretsList();
-        } catch (error) {
-            toastr.error(toUserFacingErrorText(error));
-        }
+        await writeSecret(key, value, label, { allowEmpty: true });
+        await renderSecretsList();
     });
 
     await renderSecretsList();
@@ -635,17 +698,15 @@ async function openKeyManagerDialog(key) {
                 toastr.info(t`Secret ID copied to clipboard.`);
             });
             itemTemplate.find('button[data-action="rotate-secret"]').on('click', async function () {
-                try {
-                    await rotateSecret(key, secret.id);
-                    await renderSecretsList();
-                } catch (error) {
-                    toastr.error(toUserFacingErrorText(error));
-                }
+                await rotateSecret(key, secret.id);
+                await renderSecretsList();
             });
             itemTemplate.find('button[data-action="copy-secret"]').on('click', async function () {
                 const secretValue = await findSecret(key, secret.id);
                 if (secretValue === null) {
-                    const hint = t`The key exposure is disabled. Enable Allow Keys Exposure in TauriTavern Settings and restart the app.`;
+                    const hint = globalThis.__TAURI_RUNNING__ === true
+                        ? t`The key exposure is disabled. Enable Allow Keys Exposure in TauriTavern Settings and restart the app.`
+                        : t`The key exposure might be disabled by the server config.`;
                     toastr.error(hint, t`Failed to copy secret value`);
                     return;
                 }
@@ -657,24 +718,16 @@ async function openKeyManagerDialog(key) {
                 if (!label) {
                     return;
                 }
-                try {
-                    await renameSecret(key, secret.id, label);
-                    await renderSecretsList();
-                } catch (error) {
-                    toastr.error(toUserFacingErrorText(error));
-                }
+                await renameSecret(key, secret.id, label);
+                await renderSecretsList();
             });
             itemTemplate.find('button[data-action="delete-secret"]').on('click', async function () {
                 const confirm = await Popup.show.confirm(t`Delete Secret: ${secret?.label}`, t`Are you sure you want to delete this secret? This action cannot be undone.`);
                 if (!confirm) {
                     return;
                 }
-                try {
-                    await deleteSecret(key, secret.id);
-                    await renderSecretsList();
-                } catch (error) {
-                    toastr.error(toUserFacingErrorText(error));
-                }
+                await deleteSecret(key, secret.id);
+                await renderSecretsList();
             });
             itemBlocks.push(itemTemplate);
         }
@@ -774,17 +827,14 @@ function registerSecretSlashCommands() {
             }
 
             // Set the secret as active
-            try {
-                await rotateSecret(key, savedSecret.id);
-                if (!quiet) {
-                    toastr.success(t`Secret with ID: ${id} is now active for the key: ${key}`);
-                }
-
-                return savedSecret.id;
-            } catch (error) {
-                if (!quiet) toastr.error(toUserFacingErrorText(error));
+            if (!await rotateSecret(key, savedSecret.id)) {
                 return '';
             }
+            if (!quiet) {
+                toastr.success(t`Secret with ID: ${id} is now active for the key: ${key}`);
+            }
+
+            return savedSecret.id;
         },
     }));
 
@@ -844,17 +894,12 @@ function registerSecretSlashCommands() {
             }
 
             // Delete the secret
-            try {
-                await deleteSecret(key, savedSecret.id);
-                if (!quiet) {
-                    toastr.success(t`Secret with ID: ${id} has been deleted for the key: ${key}`);
-                }
-
-                return savedSecret.id;
-            } catch (error) {
-                if (!quiet) toastr.error(toUserFacingErrorText(error));
-                return '';
+            await deleteSecret(key, savedSecret.id);
+            if (!quiet) {
+                toastr.success(t`Secret with ID: ${id} has been deleted for the key: ${key}`);
             }
+
+            return savedSecret.id;
         },
     }));
 
@@ -927,18 +972,13 @@ function registerSecretSlashCommands() {
             }
 
             const label = args?.label?.toString()?.trim() || getLabel();
-            try {
-                const id = await writeSecret(key, valueStr, label, { allowEmpty });
+            const id = await writeSecret(key, valueStr, label, { allowEmpty });
 
-                if (!quiet) {
-                    toastr.success(t`Secret has been written for the key: ${key}`);
-                }
-
-                return id || '';
-            } catch (error) {
-                if (!quiet) toastr.error(toUserFacingErrorText(error));
-                return '';
+            if (!quiet) {
+                toastr.success(t`Secret has been written for the key: ${key}`);
             }
+
+            return id || '';
         },
     }));
 
@@ -1011,17 +1051,12 @@ function registerSecretSlashCommands() {
             }
 
             // Rename the secret
-            try {
-                await renameSecret(key, savedSecret.id, newLabel);
-                if (!quiet) {
-                    toastr.success(t`Secret with ID: ${id} has been renamed to "${newLabel}" for the key: ${key}`);
-                }
-
-                return savedSecret.id;
-            } catch (error) {
-                if (!quiet) toastr.error(toUserFacingErrorText(error));
-                return '';
+            await renameSecret(key, savedSecret.id, newLabel);
+            if (!quiet) {
+                toastr.success(t`Secret with ID: ${id} has been renamed to "${newLabel}" for the key: ${key}`);
             }
+
+            return savedSecret.id;
         },
     }));
 
@@ -1096,7 +1131,6 @@ function registerSecretSlashCommands() {
 }
 
 export async function initSecrets() {
-    $(Object.values(INPUT_MAP).concat('input[type="password"], .masked-secret').join(',')).attr('data-tt-sensitive', '');
     $('#viewSecrets').on('click', viewSecrets);
     $(document).on('click', '.manage-api-keys', async function () {
         const key = $(this).data('key');
@@ -1106,7 +1140,7 @@ export async function initSecrets() {
         }
         await openKeyManagerDialog(key);
     });
-    $(document).on('input', Object.values(INPUT_MAP).join(','), async function () {
+    $(document).on('input', Object.values(INPUT_MAP).join(','), function () {
         const id = $(this).attr('id');
         const value = $(this).val();
 
@@ -1122,11 +1156,7 @@ export async function initSecrets() {
             const secretMatch = secrets.find(secret => secret.id === value);
             if (secretMatch) {
                 $(this).val('');
-                try {
-                    return await rotateSecret(key, secretMatch.id);
-                } catch (error) {
-                    toastr.error(toUserFacingErrorText(error));
-                }
+                return rotateSecret(key, secretMatch.id);
             }
         }
 

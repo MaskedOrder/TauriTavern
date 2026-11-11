@@ -1,5 +1,4 @@
 import { Window } from 'happy-dom';
-import { HOSTS, installHostIdentity } from './host-identity.mjs';
 
 export function installFakeDom({
     innerWidth = 800,
@@ -7,9 +6,7 @@ export function installFakeDom({
     userAgent = 'node',
     platform = 'node',
     maxTouchPoints = 0,
-    hostIdentity = HOSTS.windows,
 } = {}) {
-    const restoreHostIdentity = installHostIdentity(hostIdentity);
     const previousGlobals = new Map();
     const patchGlobal = (name, value) => {
         previousGlobals.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
@@ -32,10 +29,12 @@ export function installFakeDom({
         maxTouchPoints: { configurable: true, value: maxTouchPoints },
     });
 
-    const nowMs = 0;
+    let nowMs = 0;
     const microtasks = [];
     const rafs = [];
     const createdMutationObservers = [];
+    const createdIntersectionObservers = [];
+    const createdResizeObservers = [];
 
     class MutationObserver {
         constructor(callback) {
@@ -59,15 +58,43 @@ export function installFakeDom({
     }
 
     class IntersectionObserver {
+        constructor(callback, options) {
+            this._callback = callback;
+            this._options = options;
+            createdIntersectionObservers.push(this);
+        }
+
         observe() {}
         unobserve() {}
         disconnect() {}
+
+        _trigger(entries) {
+            this._callback(entries);
+        }
     }
 
     class ResizeObserver {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
+        constructor(callback) {
+            this._callback = callback;
+            this._targets = new Set();
+            createdResizeObservers.push(this);
+        }
+
+        observe(target) {
+            this._targets.add(target);
+        }
+
+        unobserve(target) {
+            this._targets.delete(target);
+        }
+
+        disconnect() {
+            this._targets.clear();
+        }
+
+        _trigger(entries) {
+            this._callback(entries);
+        }
     }
 
     const rects = new WeakMap();
@@ -198,7 +225,6 @@ export function installFakeDom({
         Element: window.Element,
         HTMLElement: window.HTMLElement,
         HTMLDivElement: window.HTMLDivElement,
-        HTMLButtonElement: window.HTMLButtonElement,
         HTMLPreElement: window.HTMLPreElement,
         HTMLTemplateElement: window.HTMLTemplateElement,
         HTMLIFrameElement: window.HTMLIFrameElement,
@@ -223,6 +249,8 @@ export function installFakeDom({
         document: window.document,
         window,
         createdMutationObservers,
+        createdIntersectionObservers,
+        createdResizeObservers,
         flushMicrotasks() {
             while (microtasks.length) {
                 microtasks.shift()?.();
@@ -233,8 +261,10 @@ export function installFakeDom({
                 rafs.shift()?.(nowMs);
             }
         },
+        setNowMs(value) {
+            nowMs = Number(value) || 0;
+        },
         cleanup() {
-            restoreHostIdentity();
             void window.happyDOM.abort();
             for (const [name, descriptor] of previousGlobals) {
                 if (descriptor) {

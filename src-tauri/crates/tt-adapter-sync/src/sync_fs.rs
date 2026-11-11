@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufWriter};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use ttsync_contract::path::SyncPath;
 use ttsync_core::dataset::prune_boundary_for_path;
 use ttsync_core::error::SyncError;
@@ -49,7 +49,7 @@ pub(crate) async fn write_file_atomic(
     }
 
     let tmp_path = download_tmp_path(path);
-    let file = tokio::fs::OpenOptions::new()
+    let mut file = tokio::fs::OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(true)
@@ -58,15 +58,13 @@ pub(crate) async fn write_file_atomic(
         .map_err(|error| FileMutationError::unchanged(SyncError::Internal(error.to_string())))?;
 
     let result = async {
-        let mut writer = BufWriter::with_capacity(64 * 1024, file);
-        copy_to_file(data, &mut writer).await?;
-        writer.flush().await.map_err(|error| {
+        copy_to_file(data, &mut file).await?;
+        file.flush().await.map_err(|error| {
             SyncError::Io(format!(
                 "Flush staged sync file {}: {error}",
                 tmp_path.display()
             ))
         })?;
-        let file = writer.into_inner();
         set_file_modified_ms(&tmp_path, modified_ms)?;
         file.sync_all().await.map_err(|error| {
             SyncError::Io(format!("Sync staged file {}: {error}", tmp_path.display()))
@@ -179,7 +177,7 @@ async fn remove_fileless_tree(root: &Path) -> std::io::Result<bool> {
 
 async fn copy_to_file(
     data: &mut (dyn AsyncRead + Send + Unpin),
-    file: &mut BufWriter<tokio::fs::File>,
+    file: &mut tokio::fs::File,
 ) -> Result<(), SyncError> {
     let mut buffer = vec![0u8; 64 * 1024];
     loop {

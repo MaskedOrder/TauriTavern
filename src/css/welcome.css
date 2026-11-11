@@ -16,7 +16,9 @@
 
 .welcomePanel.recentHidden .welcomeRecent,
 .welcomePanel.recentHidden .recentChatsTitle,
-.welcomePanel.recentHidden .recentChatsSettings {
+.welcomePanel.recentHidden .hideRecentChats,
+.welcomePanel.recentHidden .recentChatsSettings,
+.welcomePanel:not(.recentHidden) .showRecentChats {
     display: none;
 }
 
@@ -214,7 +216,7 @@ body.big-avatars .welcomeRecent .recentChatList .recentChat .chatMessageContaine
     display: none;
 }
 
-.welcomeRecent .recentChatList .recentChatsMore {
+.welcomeRecent .recentChatList .showMoreChats {
     align-self: center;
 }
 

@@ -1,10 +1,7 @@
-import { installHostIdentity } from './helpers/host-identity.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-
-test.beforeEach(t => t.after(installHostIdentity()));
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -13,6 +10,7 @@ let lastInvokedCommand = null;
 let lastInvokedArgs = null;
 
 global.window = {
+    __TAURI_RUNNING__: true,
     __TAURI__: {
         core: {
             invoke: async (command, args) => {

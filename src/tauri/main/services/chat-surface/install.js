@@ -26,7 +26,6 @@ export const CHAT_LAYOUT_CHANGED_EVENT = 'sillytavern:chat-layout-changed';
  *   prepareMaterializeOptions: (input: { messages: any[]; messageIds: number[] }) => Promise<Map<number, any>>;
  *   materializeMessage: (input: any) => any;
  *   formatMessageContent: (message: any, messageId: number) => string;
- *   refreshMessageDetails: (element: HTMLElement) => void;
  *   prepareContentTransaction: (element: HTMLElement, html: string) => { content: HTMLElement; commit: () => unknown };
  *   emitEvent: (event: string, messageId: number, ...args: any[]) => Promise<void>;
  *   syncMountedViewState: (messageIds: readonly number[]) => void;
@@ -39,7 +38,6 @@ export function installChatSurfaceRuntime({
     prepareMaterializeOptions,
     materializeMessage,
     formatMessageContent,
-    refreshMessageDetails,
     prepareContentTransaction,
     emitEvent,
     syncMountedViewState,
@@ -111,21 +109,9 @@ export function installChatSurfaceRuntime({
     }
 
     async function refreshContent() {
-        const messages = getMessages();
-        const canRefresh = (/** @type {any} */ message, /** @type {HTMLElement | null} */ element) => element
-            && !contentPreparation.isTransient(message)
-            && !element.querySelector('.edit_textarea, .reasoning_edit_textarea');
-        const entries = activeController.getMountedMessageIds()
-            .map(messageId => ({ messageId, message: messages[messageId] }))
-            .filter(({ messageId, message }) => canRefresh(message, activeController.getMessageElement(messageId)));
-        const messageIds = entries.map(entry => entry.messageId);
-        const contents = await prepareMaterializeOptions({ messages, messageIds });
-        for (const { messageId, message } of entries) {
-            const element = activeController.getMessageElement(messageId);
-            // A display refresh never replaces an editor or a superseded message.
-            if (getMessages()[messageId] !== message || !canRefresh(message, element)) continue;
-            activeController.updateContent(element, prepareContentTransaction(element, contents.get(messageId).messageHtml));
-            refreshMessageDetails(element);
+        const messageIds = activeController.getMountedMessageIds();
+        for (const messageId of messageIds) {
+            if (!contentPreparation.isTransient(getMessages()[messageId])) updateContent(messageId);
         }
         await contentPreparation.ready(messageIds);
     }
@@ -281,7 +267,6 @@ export function installChatSurfaceRuntime({
         getMountedMessageIds: activeController.getMountedMessageIds,
         isBoundedView,
         finishContent,
-        refreshContent,
         jumpToMessage,
         reconcileMounted,
         render,

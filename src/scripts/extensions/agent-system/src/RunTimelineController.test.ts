@@ -251,16 +251,11 @@ test('retry is typed, history is read-only, and resize persistence follows compl
     controller.moveResize(450);
     controller.finishResize(false);
     expect(state.patches).toHaveLength(0);
-    const crampedBounds = { min: 48, max: 48 };
-    controller.startResize(500, 300, crampedBounds);
-    controller.moveResize(440);
+    controller.startResize(500, 300, { min: 132, max: 600 });
     controller.finishResize(true);
-    expect(state.patches).toEqual([{ runTimelineHeightPx: crampedBounds.max }]);
-    expect(controller.resizeByKey('ArrowUp', 300, crampedBounds)).toBe(true);
-    expect(state.patches).toEqual([
-        { runTimelineHeightPx: crampedBounds.max },
-        { runTimelineHeightPx: crampedBounds.max },
-    ]);
+    expect(state.patches).toHaveLength(1);
+    expect(controller.resizeByKey('ArrowUp', 300, { min: 132, max: 600 })).toBe(true);
+    expect(state.patches).toHaveLength(2);
     controller.resetPanelHeight();
     expect(state.patches.at(-1)).toEqual({ runTimelineHeightPx: null });
     controller.dispose();
@@ -309,7 +304,7 @@ test('active mode removes transient writes immediately and detaches at terminal'
     const emit = (update: TauriTavernAgentRunLiveUpdate) => liveHandler?.(update);
 
     state.eventListener?.(event(1));
-    emit({ type: 'snapshot', calls: [], responses: [] });
+    emit({ type: 'snapshot', calls: [], reasoning: [] });
     emit({ type: 'replace', call: liveCall });
     emit({ type: 'append', invocationId: 'inv_root', toolCallIndex: 0, field: 'content', text: 'Hello', wordDelta: 1 });
 

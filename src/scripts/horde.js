@@ -1,4 +1,3 @@
-import { toUserFacingErrorText } from './util/user-facing-error.js';
 import {
     amount_gen,
     getRequestHeaders,
@@ -9,7 +8,7 @@ import {
     setGenerationProgress,
     setOnlineStatus,
 } from '../script.js';
-import { SECRET_KEYS, readSecretState, secret_state, writeSecret } from './secrets.js';
+import { SECRET_KEYS, writeSecret } from './secrets.js';
 import { delay } from './utils.js';
 import { isMobile } from './RossAscends-mods.js';
 import { autoSelectInstructPreset } from './instruct-mode.js';
@@ -451,18 +450,12 @@ export function initHorde() {
     });
 
     $('#horde_api_key_button').on('click', async function () {
-        try {
-            await readSecretState();
-            const key = String($('#horde_api_key').val()).trim();
-            if (!key && !secret_state[SECRET_KEYS.HORDE]) {
-                toastr.warning(t`Please enter your Horde API key`);
-                return;
-            }
-            if (key) await writeSecret(SECRET_KEYS.HORDE, key);
-            await getStatusHorde();
-        } catch (error) {
-            toastr.error(toUserFacingErrorText(error));
+        const key = String($('#horde_api_key').val()).trim();
+        if (!key) {
+            toastr.warning(t`Please enter your Horde API key`);
+            return;
         }
+        await writeSecret(SECRET_KEYS.HORDE, key);
     });
 
     $('#horde_refresh').on('click', () => getHordeModels(true));
@@ -483,3 +476,4 @@ export function initHorde() {
         });
     }
 }
+

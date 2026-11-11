@@ -133,16 +133,15 @@ mod tests {
     #[test]
     fn xai_maps_reasoning_effort_to_the_supported_levels() {
         for (requested, expected) in [
-            ("min", Some("low")),
+            ("min", Some("minimal")),
             ("low", Some("low")),
             ("medium", Some("medium")),
-            ("high", Some("high")),
-            ("xhigh", Some("xhigh")),
-            ("max", Some("xhigh")),
+            ("xhigh", Some("high")),
+            ("max", Some("high")),
             ("auto", None),
         ] {
             let payload = json!({
-                "model": "grok-4.7",
+                "model": "grok-4",
                 "messages": [{"role": "user", "content": "hello"}],
                 "reasoning_effort": requested,
                 "chat_completion_source": "xai"

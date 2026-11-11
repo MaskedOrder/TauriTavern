@@ -16,10 +16,6 @@ pub struct DownloadedBytes {
     pub content_disposition: Option<String>,
 }
 
-pub struct DownloadedFile {
-    pub content_type: Option<String>,
-}
-
 #[async_trait]
 pub trait ExternalImportDownloader: Send + Sync {
     async fn fetch_bytes(
@@ -28,5 +24,5 @@ pub trait ExternalImportDownloader: Send + Sync {
         limit: Option<DownloadByteLimit>,
     ) -> Result<DownloadedBytes, DomainError>;
 
-    async fn fetch_to_file(&self, url: Url, path: &Path) -> Result<DownloadedFile, DomainError>;
+    async fn fetch_to_file(&self, url: Url, path: &Path) -> Result<(), DomainError>;
 }

@@ -1,14 +1,14 @@
 import { Handlebars, moment, seedrandom, droll } from '../lib.js';
-import { chat, chat_metadata, getCurrentChatId, substituteParams } from '../script.js';
+import { chat, chat_metadata, main_api, getMaxPromptTokens, getMaxContextTokens, getMaxResponseTokens, getCurrentChatId, substituteParams, eventSource, event_types, extension_prompts } from '../script.js';
 import { timestampToMoment, isDigitsOnly, getStringHash, escapeRegex, uuidv4 } from './utils.js';
+import { textgenerationwebui_banned_in_macros } from './textgen-settings.js';
 import { getInstructMacros } from './instruct-mode.js';
-import { getVariableMacros } from './variables/scopes.js';
+import { getVariableMacros } from './variables.js';
+import { isMobile } from './RossAscends-mods.js';
 import { inject_ids } from './constants.js';
 import { initRegisterMacros, macros as macroSystem } from './macros/macro-system.js';
 import { findLastMessageId, getLastSwipeId as getChatLastSwipeId, getCurrentSwipeId as getChatCurrentSwipeId } from './macros/chat-state.js';
 import { power_user } from './power-user.js';
-import { MacroEnvBuilder } from './macros/engine/MacroEnvBuilder.js';
-import { getMacroMessageExamples } from './macros/definitions/env-macros.js';
 
 /**
  * @typedef Macro
@@ -27,7 +27,7 @@ Handlebars.registerHelper('helperMissing', function () {
 
 /**
  * @typedef {Object<string, *>} EnvObject
- * @typedef {(nonce: string, env?: import('./macros/engine/MacroEnv.types.js').MacroEnv) => string} MacroFunction
+ * @typedef {(nonce: string) => string} MacroFunction
  */
 
 /**
@@ -96,14 +96,14 @@ export class MacrosParser {
             // contract that only {{key}} without arguments is valid.
             category: 'legacy',
             description: typeof description === 'string' ? description : 'Automatically registered macro from MacrosParser',
-            handler: ({ env }) => {
+            handler: () => {
                 /** @type {string|MacroFunction|undefined} */
                 let stored = legacyValue;
 
                 if (typeof stored === 'function') {
                     try {
                         const nonce = uuidv4();
-                        stored = stored(nonce, env);
+                        stored = stored(nonce);
                     } catch (e) {
                         console.warn(`Macro "${key}" function threw an error.`, e);
                         stored = '';
@@ -313,11 +313,11 @@ export class MacrosParser {
  * If no metadata exists, creates a new hash and saves it.
  * @returns {number} The hashed chat id
  */
-export function getChatIdHash() {
+function getChatIdHash() {
     const cachedIdHash = chat_metadata.chat_id_hash;
 
     // If chat_id_hash is not already set, calculate it
-    if (typeof cachedIdHash !== 'number') {
+    if (!cachedIdHash) {
         // Use the main_chat if it's available, otherwise get the current chat ID
         const chatId = chat_metadata.main_chat ?? getCurrentChatId();
         const chatIdHash = getStringHash(chatId);
@@ -419,12 +419,12 @@ export function getCurrentSwipeId() {
  * Adds them to textgenerationwebui ban list.
  * @returns {Macro}
  */
-function getBannedWordsMacro(macroEnv) {
+function getBannedWordsMacro() {
     const banPattern = /{{banned "(.*)"}}/gi;
     const banReplace = (match, bannedWord) => {
-        if (macroEnv.system.api === 'textgenerationwebui') {
+        if (main_api == 'textgenerationwebui') {
             console.log('Found banned word in macros: ' + bannedWord);
-            macroEnv.bannedWords.push(bannedWord);
+            textgenerationwebui_banned_in_macros.push(bannedWord);
         }
         return '';
     };
@@ -491,10 +491,10 @@ function getRandomReplaceMacro() {
  * @param {string} rawContent The raw content of the string
  * @returns {Macro} The pick replace macro
  */
-function getPickReplaceMacro(rawContent, macroEnv) {
+function getPickReplaceMacro(rawContent) {
     // We need to have a consistent chat hash, otherwise we'll lose rolls on chat file rename or branch switches
     // No need to save metadata here - branching and renaming will implicitly do the save for us, and until then loading it like this is consistent
-    const chatIdHash = macroEnv.chat.idHash;
+    const chatIdHash = getChatIdHash();
     const rawContentHash = getStringHash(rawContent);
 
     const pickPattern = /{{pick\s?::?([^}]+)}}/gi;
@@ -572,58 +572,9 @@ function getTimeDiffMacro() {
  * @param {string} key - The outlet key
  * @returns {string} The outlet prompt
  */
-function getOutletPrompt(key, macroEnv) {
-    const value = macroEnv.extensionPrompts[inject_ids.CUSTOM_WI_OUTLET(key)]?.value;
+function getOutletPrompt(key) {
+    const value = extension_prompts[inject_ids.CUSTOM_WI_OUTLET(key)]?.value;
     return value || '';
-}
-
-/**
- * Evaluate the legacy grammar with an already prepared macro environment.
- * @param {string} content
- * @param {import('./macros/engine/MacroEnv.types.js').MacroEnv} macroEnv
- * @returns {string}
- */
-export function evaluateLegacyWithEnv(content, macroEnv) {
-    const env = {};
-    if (macroEnv.functions.original) env.original = macroEnv.functions.original;
-    // Legacy card extraction is eager and ordered: fields may write variables used by later fields.
-    const character = {};
-    for (const field of ['charPrompt', 'mesExamplesRaw', 'description', 'personality', 'persona', 'scenario',
-        'charInstruction', 'version', 'charDepthPrompt', 'creatorNotes', 'firstMessage', 'alternateGreetings']) {
-        if (Object.hasOwn(macroEnv.character, field)) character[field] = macroEnv.character[field];
-    }
-    const fields = {
-        charPrompt: 'charPrompt',
-        charInstruction: 'charInstruction',
-        charJailbreak: 'charInstruction',
-        description: 'description',
-        personality: 'personality',
-        scenario: 'scenario',
-        persona: 'persona',
-        mesExamplesRaw: 'mesExamplesRaw',
-        charVersion: 'version',
-        char_version: 'version',
-        charDepthPrompt: 'charDepthPrompt',
-        creatorNotes: 'creatorNotes',
-    };
-    for (const [name, field] of Object.entries(fields)) {
-        if (Object.hasOwn(character, field)) env[name] = character[field] ?? '';
-    }
-    if (Object.hasOwn(character, 'mesExamplesRaw')) {
-        env.mesExamples = () => getMacroMessageExamples({ ...macroEnv, character });
-    }
-    // Names follow card fields so legacy substitution still expands names in those fields.
-    env.user = macroEnv.names.user;
-    env.char = macroEnv.names.char;
-    env.group = env.charIfNotGroup = macroEnv.names.group;
-    env.groupNotMuted = macroEnv.names.groupNotMuted;
-    env.notChar = macroEnv.names.notChar;
-    env.model = macroEnv.system.model;
-    for (const [name, value] of Object.entries(macroEnv.dynamicMacros)) {
-        const existing = Object.keys(env).find(key => key.toLowerCase() === name.toLowerCase());
-        env[existing ?? name] = value;
-    }
-    return evaluateMacros(content, env, macroEnv.functions.postProcess, macroEnv);
 }
 
 /**
@@ -632,15 +583,13 @@ export function evaluateLegacyWithEnv(content, macroEnv) {
  * @param {EnvObject} env - Map of macro names to the values they'll be substituted with. If the param
  * values are functions, those functions will be called and their return values are used.
  * @param {function(string): string} postProcessFn - Function to run on the macro value before replacing it.
- * @param {import('./macros/engine/MacroEnv.types.js').MacroEnv|null} [macroEnv] - Explicit source for built-ins; omitted for ordinary live calls.
  * @returns {string} The string with substituted parameters.
  */
-export function evaluateMacros(content, env, postProcessFn, macroEnv = null) {
+export function evaluateMacros(content, env, postProcessFn) {
     if (!content) {
         return '';
     }
 
-    macroEnv ??= MacroEnvBuilder.buildFromRawEnv({ content, replaceCharacterCard: false }, 'legacy');
     postProcessFn = typeof postProcessFn === 'function' ? postProcessFn : (x => x);
     const rawContent = content;
 
@@ -656,12 +605,12 @@ export function evaluateMacros(content, env, postProcessFn, macroEnv = null) {
         { regex: /<CHARIFNOTGROUP>/gi, replace: () => typeof env.group === 'function' ? env.group() : env.group },
         { regex: /<GROUP>/gi, replace: () => typeof env.group === 'function' ? env.group() : env.group },
         getDiceRollMacro(),
-        ...getInstructMacros(env, macroEnv.settings),
-        ...getVariableMacros(macroEnv.variables),
+        ...getInstructMacros(env),
+        ...getVariableMacros(),
         { regex: /{{newline}}/gi, replace: () => '\n' },
         { regex: /(?:\r?\n)*{{trim}}(?:\r?\n)*/gi, replace: () => '' },
         { regex: /{{noop}}/gi, replace: () => '' },
-        { regex: /{{input}}/gi, replace: () => macroEnv.state.input },
+        { regex: /{{input}}/gi, replace: () => String($('#send_textarea').val()) },
     ];
 
     /**
@@ -669,36 +618,36 @@ export function evaluateMacros(content, env, postProcessFn, macroEnv = null) {
      * @type {Macro[]}
     */
     const postEnvMacros = [
-        { regex: /{{maxPrompt}}/gi, replace: () => String(macroEnv.system.maxPrompt) },
-        { regex: /{{maxPromptTokens}}/gi, replace: () => String(macroEnv.system.maxPrompt) },
-        { regex: /{{maxContext}}/gi, replace: () => String(macroEnv.system.maxContext) },
-        { regex: /{{maxContextTokens}}/gi, replace: () => String(macroEnv.system.maxContext) },
-        { regex: /{{maxResponse}}/gi, replace: () => String(macroEnv.system.maxResponse) },
-        { regex: /{{maxResponseTokens}}/gi, replace: () => String(macroEnv.system.maxResponse) },
-        { regex: /{{lastMessage}}/gi, replace: () => macroEnv.chat.lastMessage },
-        { regex: /{{lastMessageId}}/gi, replace: () => String(macroEnv.chat.lastMessageId ?? '') },
-        { regex: /{{lastUserMessage}}/gi, replace: () => macroEnv.chat.lastUserMessage },
-        { regex: /{{lastCharMessage}}/gi, replace: () => macroEnv.chat.lastCharMessage },
-        { regex: /{{firstIncludedMessageId}}/gi, replace: () => String(macroEnv.chat.firstIncludedMessageId ?? '') },
-        { regex: /{{firstDisplayedMessageId}}/gi, replace: () => String(macroEnv.chat.firstDisplayedMessageId ?? '') },
-        { regex: /{{lastSwipeId}}/gi, replace: () => String(macroEnv.chat.lastSwipeId ?? '') },
-        { regex: /{{currentSwipeId}}/gi, replace: () => String(macroEnv.chat.currentSwipeId ?? '') },
-        { regex: /{{allChatRange}}/gi, replace: () => macroEnv.chat.allChatRange },
+        { regex: /{{maxPrompt}}/gi, replace: () => String(getMaxPromptTokens()) },
+        { regex: /{{maxPromptTokens}}/gi, replace: () => String(getMaxPromptTokens()) },
+        { regex: /{{maxContext}}/gi, replace: () => String(getMaxContextTokens()) },
+        { regex: /{{maxContextTokens}}/gi, replace: () => String(getMaxContextTokens()) },
+        { regex: /{{maxResponse}}/gi, replace: () => String(getMaxResponseTokens()) },
+        { regex: /{{maxResponseTokens}}/gi, replace: () => String(getMaxResponseTokens()) },
+        { regex: /{{lastMessage}}/gi, replace: () => getLastMessage() },
+        { regex: /{{lastMessageId}}/gi, replace: () => String(getLastMessageId() ?? '') },
+        { regex: /{{lastUserMessage}}/gi, replace: () => getLastUserMessage() },
+        { regex: /{{lastCharMessage}}/gi, replace: () => getLastCharMessage() },
+        { regex: /{{firstIncludedMessageId}}/gi, replace: () => String(getFirstIncludedMessageId() ?? '') },
+        { regex: /{{firstDisplayedMessageId}}/gi, replace: () => String(getFirstDisplayedMessageId() ?? '') },
+        { regex: /{{lastSwipeId}}/gi, replace: () => String(getLastSwipeId() ?? '') },
+        { regex: /{{currentSwipeId}}/gi, replace: () => String(getCurrentSwipeId() ?? '') },
+        { regex: /{{allChatRange}}/gi, replace: () => chat.length === 0 ? '' : `0-${chat.length - 1}` },
         { regex: /{{reverse:(.+?)}}/gi, replace: (_, str) => Array.from(str).reverse().join('') },
         { regex: /\{\{\/\/([\s\S]*?)\}\}/gm, replace: () => '' },
-        { regex: /{{time}}/gi, replace: () => moment(macroEnv.now).format('LT') },
-        { regex: /{{date}}/gi, replace: () => moment(macroEnv.now).format('LL') },
-        { regex: /{{weekday}}/gi, replace: () => moment(macroEnv.now).format('dddd') },
-        { regex: /{{isotime}}/gi, replace: () => moment(macroEnv.now).format('HH:mm') },
-        { regex: /{{isodate}}/gi, replace: () => moment(macroEnv.now).format('YYYY-MM-DD') },
-        { regex: /{{datetimeformat +([^}]*)}}/gi, replace: (_, format) => moment(macroEnv.now).format(format) },
-        { regex: /{{idle_duration}}/gi, replace: () => macroEnv.chat.idleDuration },
-        { regex: /{{time_UTC([-+]\d+)}}/gi, replace: (_, offset) => moment(macroEnv.now).utc().utcOffset(parseInt(offset, 10)).format('LT') },
-        { regex: /{{outlet::(.+?)}}/gi, replace: (_, key) => getOutletPrompt(key.trim(), macroEnv) || '' },
+        { regex: /{{time}}/gi, replace: () => moment().format('LT') },
+        { regex: /{{date}}/gi, replace: () => moment().format('LL') },
+        { regex: /{{weekday}}/gi, replace: () => moment().format('dddd') },
+        { regex: /{{isotime}}/gi, replace: () => moment().format('HH:mm') },
+        { regex: /{{isodate}}/gi, replace: () => moment().format('YYYY-MM-DD') },
+        { regex: /{{datetimeformat +([^}]*)}}/gi, replace: (_, format) => moment().format(format) },
+        { regex: /{{idle_duration}}/gi, replace: () => getTimeSinceLastMessage() },
+        { regex: /{{time_UTC([-+]\d+)}}/gi, replace: (_, offset) => moment().utc().utcOffset(parseInt(offset, 10)).format('LT') },
+        { regex: /{{outlet::(.+?)}}/gi, replace: (_, key) => getOutletPrompt(key.trim()) || '' },
         getTimeDiffMacro(),
-        getBannedWordsMacro(macroEnv),
+        getBannedWordsMacro(),
         getRandomReplaceMacro(),
-        getPickReplaceMacro(rawContent, macroEnv),
+        getPickReplaceMacro(rawContent),
     ];
 
     // Add all registered macros to the env object
@@ -713,7 +662,7 @@ export function evaluateMacros(content, env, postProcessFn, macroEnv = null) {
         const envRegex = new RegExp(`{{${escapeRegex(varName)}}}`, 'gi');
         const envReplace = () => {
             const param = env[varName];
-            const value = MacrosParser.sanitizeMacroValue(typeof param === 'function' ? param(nonce, macroEnv) : param);
+            const value = MacrosParser.sanitizeMacroValue(typeof param === 'function' ? param(nonce) : param);
             return value;
         };
 
@@ -746,15 +695,29 @@ export function evaluateMacros(content, env, postProcessFn, macroEnv = null) {
 export function initMacros() {
     // Only manually register those is new macro engine is not on. In the new one, they are already registered automatically
     if (!power_user.experimental_macro_engine) {
-        MacrosParser.registerMacro('lastGenerationType',
-            (_nonce, env) => env.state.lastGenerationType,
-            'Returns the type of the last generation (e.g., "normal", "swipe", "continue", "impersonate", "quiet").',
-        );
+        function initLastGenerationType() {
+            let lastGenerationType = '';
+
+            MacrosParser.registerMacro('lastGenerationType',
+                () => lastGenerationType,
+                'Returns the type of the last generation (e.g., "normal", "swipe", "continue", "impersonate", "quiet").',
+            );
+
+            eventSource.on(event_types.GENERATION_STARTED, (type, _params, isDryRun) => {
+                if (isDryRun) return;
+                lastGenerationType = type || 'normal';
+            });
+
+            eventSource.on(event_types.CHAT_CHANGED, () => {
+                lastGenerationType = '';
+            });
+        }
 
         MacrosParser.registerMacro('isMobile',
-            (_nonce, env) => String(env.state.isMobile),
+            () => String(isMobile()),
             'Returns "true" if the user is on a mobile device, "false" otherwise.',
         );
+        initLastGenerationType();
     }
 
     // TODO: Needs to be moved once old macros are deprecated and removed

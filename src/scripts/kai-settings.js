@@ -1,5 +1,3 @@
-import { initSortableList, setSortableListEnabled } from './sortable-list.js';
-import { restoreNumericInput, showNumericAdjustments } from './dom-handlers.js';
 import {
     getRequestHeaders,
     saveSettingsDebounced,
@@ -23,7 +21,7 @@ import {
     power_user,
 } from './power-user.js';
 import { getEventSourceStream } from './sse-stream.js';
-import { versionCompare } from './utils.js';
+import { getSortableDelay, versionCompare } from './utils.js';
 
 export let koboldai_settings;
 export let koboldai_setting_names;
@@ -97,7 +95,7 @@ function selectKoboldGuiPreset() {
         .trigger('change');
 }
 
-export function loadKoboldSettings(data, preset, settings, adjustments = []) {
+export function loadKoboldSettings(data, preset, settings) {
     koboldai_setting_names = data.koboldai_setting_names;
     koboldai_settings = data.koboldai_settings;
     koboldai_settings.forEach(function (item, i, arr) {
@@ -128,13 +126,13 @@ export function loadKoboldSettings(data, preset, settings, adjustments = []) {
         }
     }
 
-    loadKoboldSettingsFromPreset(preset, adjustments);
+    loadKoboldSettingsFromPreset(preset);
 
     //Load the API server URL from settings
     $('#api_url_text').val(kai_settings.api_server);
 }
 
-function loadKoboldSettingsFromPreset(preset, adjustments) {
+function loadKoboldSettingsFromPreset(preset) {
     for (const name of Object.keys(kai_settings)) {
         if (name === 'extensions') {
             kai_settings.extensions = preset.extensions || {};
@@ -148,10 +146,10 @@ function loadKoboldSettingsFromPreset(preset, adjustments) {
             continue;
         }
 
-        const control = $(slider.sliderId);
-        if (control.is('input[type=range], input[type=number]')) restoreNumericInput(control[0], value, adjustments, t`KoboldAI`);
-        else if (control.length) control.val(value).trigger('input');
-        else slider.setValue(value); // Sampler order has no scalar input.
+        const formattedValue = slider.format(value);
+        slider.setValue(value);
+        $(slider.sliderId).val(value);
+        $(slider.counterId).val(formattedValue);
     }
 
     if (Object.hasOwn(preset, 'streaming_kobold')) {
@@ -463,20 +461,25 @@ export function initKoboldSettings() {
         });
     });
 
-    $('#api_button').on('click', function () {
-        if (isConnectionValidationSuspended()) return;
-        if ($('#api_url_text').val() === '') return;
-
-        const value = formatKoboldUrl(String($('#api_url_text').val()).trim());
-        if (!value) {
-            toastr.error('Please enter a valid URL.');
+    $('#api_button').on('click', function (e) {
+        if (isConnectionValidationSuspended()) {
             return;
         }
-        $('#api_url_text').val(value);
-        kai_settings.api_server = value;
-        startStatusLoading();
-        saveSettingsDebounced();
-        getStatusKobold();
+
+        if ($('#api_url_text').val() != '') {
+            const value = formatKoboldUrl(String($('#api_url_text').val()).trim());
+
+            if (!value) {
+                toastr.error('Please enter a valid URL.');
+                return;
+            }
+
+            $('#api_url_text').val(value);
+            kai_settings.api_server = value;
+            startStatusLoading();
+            saveSettingsDebounced();
+            getStatusKobold();
+        }
     });
 
     $('#streaming_kobold').on('input', function () {
@@ -491,7 +494,18 @@ export function initKoboldSettings() {
         saveSettingsDebounced();
     });
 
-    initSortableList(document.getElementById('kobold_order'), saveSamplingOrder);
+    $('#kobold_order').sortable({
+        delay: getSortableDelay(),
+        stop: function () {
+            const order = [];
+            $('#kobold_order').children().each(function () {
+                order.push($(this).data('id'));
+            });
+            kai_settings.sampler_order = order;
+            console.log('Samplers reordered:', kai_settings.sampler_order);
+            saveSettingsDebounced();
+        },
+    });
 
     $('#samplers_order_recommended').on('click', function () {
         kai_settings.sampler_order = KOBOLDCPP_ORDER;
@@ -503,27 +517,24 @@ export function initKoboldSettings() {
         if ($('#settings_preset').find(':selected').val() != 'gui') {
             kai_settings.preset_settings = $('#settings_preset').find(':selected').text();
             const preset = koboldai_settings[koboldai_setting_names[kai_settings.preset_settings]];
-            const adjustments = [];
-            setGenerationParamsFromPreset(preset, adjustments);
-            loadKoboldSettingsFromPreset(preset, adjustments);
-            showNumericAdjustments(adjustments);
+            loadKoboldSettingsFromPreset(preset);
+            setGenerationParamsFromPreset(preset);
             $('#kobold_api-settings').find('input').prop('disabled', false);
             $('#kobold_api-settings').css('opacity', 1.0);
-            setSortableListEnabled(document.getElementById('kobold_order'), true);
+            $('#kobold_order')
+                .css('opacity', 1)
+                .sortable('enable');
         } else {
             kai_settings.preset_settings = 'gui';
 
             $('#kobold_api-settings').find('input').prop('disabled', true);
             $('#kobold_api-settings').css('opacity', 0.5);
 
-            setSortableListEnabled(document.getElementById('kobold_order'), false);
+            $('#kobold_order')
+                .css('opacity', 0.5)
+                .sortable('disable');
         }
         saveSettingsDebounced();
         await eventSource.emit(event_types.PRESET_CHANGED, { apiId: 'kobold', name: kai_settings.preset_settings });
     });
-}
-
-function saveSamplingOrder() {
-    kai_settings.sampler_order = $('#kobold_order').children().map((_, item) => $(item).data('id')).get();
-    saveSettingsDebounced();
 }

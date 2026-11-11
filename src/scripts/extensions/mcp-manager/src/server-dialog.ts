@@ -22,18 +22,6 @@ function serverInput(
     return input;
 }
 
-/** A hint that explains one control is announced with it; section notes pass no control. */
-function formHint(text: string, control?: HTMLElement): HTMLElement {
-    const hint = document.createElement('small');
-    hint.className = 'tt-mcp-add-hint';
-    hint.textContent = text;
-    if (control) {
-        hint.id = `${control.id}-hint`;
-        control.setAttribute('aria-describedby', hint.id);
-    }
-    return hint;
-}
-
 function isHttpUrl(value: string): boolean {
     try {
         const url = new URL(value);
@@ -172,9 +160,12 @@ async function openServerDialog(
     endpoint.inputMode = 'url';
     endpoint.value = server?.endpoint ?? '';
 
-    manualPane.append(formHint(tr('endpointHint'), endpoint));
-    if (!server) {
-        manualPane.append(formHint(tr('newServerNote')));
+    const notes = server ? [tr('endpointHint')] : [tr('endpointHint'), tr('newServerNote')];
+    for (const text of notes) {
+        const hint = document.createElement('small');
+        hint.className = 'tt-mcp-add-hint';
+        hint.textContent = text;
+        manualPane.append(hint);
     }
 
     const advanced = document.createElement('details');
@@ -199,7 +190,10 @@ async function openServerDialog(
         protocolVersion.append(option);
     }
     protocolVersion.value = server?.protocolVersion ?? 'auto';
-    advanced.append(protocolLabel, protocolVersion, formHint(tr('protocolHint'), protocolVersion));
+    const protocolHint = document.createElement('small');
+    protocolHint.className = 'tt-mcp-add-hint';
+    protocolHint.textContent = tr('protocolHint');
+    advanced.append(protocolLabel, protocolVersion, protocolHint);
 
     const headersHead = document.createElement('div');
     headersHead.className = 'tt-mcp-header-head';
@@ -256,7 +250,10 @@ async function openServerDialog(
     for (const [name, value] of Object.entries(server?.headers ?? {})) {
         addHeader(name, value, false);
     }
-    advanced.append(headersHead, headerList, formHint(tr('headersPlaintext')));
+    const plaintextHint = document.createElement('small');
+    plaintextHint.className = 'tt-mcp-add-hint';
+    plaintextHint.textContent = tr('headersPlaintext');
+    advanced.append(headersHead, headerList, plaintextHint);
     // Reflect the current state: editing a server with advanced settings reveals them.
     advanced.open = server !== undefined
         && (Object.keys(server.headers).length > 0 || server.protocolVersion !== 'auto');
@@ -273,12 +270,11 @@ async function openServerDialog(
     jsonInput.className = 'text_pole tt-mcp-json-input';
     jsonInput.spellcheck = false;
     jsonInput.placeholder = '{\n  "exa": {\n    "url": "https://mcp.exa.ai/mcp",\n    "headers": { "x-api-key": "YOUR_EXA_API_KEY" }\n  }\n}';
-    jsonPane.append(
-        jsonLabel,
-        jsonInput,
-        formHint(tr('jsonHint'), jsonInput),
-        formHint(tr('headersPlaintext')),
-    );
+    const jsonHint = document.createElement('small');
+    jsonHint.className = 'tt-mcp-add-hint';
+    jsonHint.textContent = tr('jsonHint');
+    const jsonPlaintextHint = plaintextHint.cloneNode(true);
+    jsonPane.append(jsonLabel, jsonInput, jsonHint, jsonPlaintextHint);
 
     let mode: 'manual' | 'json' = 'manual';
     function setMode(next: 'manual' | 'json'): void {

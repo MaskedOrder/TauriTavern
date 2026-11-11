@@ -2,6 +2,7 @@ import { WORKSPACE_ROOTS } from './constants';
 import type { AgentSystemPanelController } from './AgentSystemPanelController';
 import {
     isBuiltinProfile,
+    parseNumberInput,
     workspaceRootIcon,
     type AgentSystemPanelSnapshot,
     type Tr,
@@ -39,6 +40,28 @@ export function ProfileSkillsSection({ snapshot, controller, tr }: ProfileSectio
                         value={draft.skills.denyCsv ?? ''}
                         disabled={builtin}
                         onChange={(event) => controller.setSkillsCsvField('denyCsv', event.target.value)}
+                    />
+                </label>
+                <label className="ttas-field">
+                    <span>{tr('maxCharsPerCall')}</span>
+                    <input
+                        className="text_pole"
+                        type="number"
+                        min="1"
+                        value={draft.skills.maxReadCharsPerCall}
+                        disabled={builtin}
+                        onChange={(event) => controller.setSkillsLimitField('maxReadCharsPerCall', parseNumberInput(event.target.value))}
+                    />
+                </label>
+                <label className="ttas-field">
+                    <span>{tr('maxCharsPerRun')}</span>
+                    <input
+                        className="text_pole"
+                        type="number"
+                        min="1"
+                        value={draft.skills.maxReadCharsPerRun}
+                        disabled={builtin}
+                        onChange={(event) => controller.setSkillsLimitField('maxReadCharsPerRun', parseNumberInput(event.target.value))}
                     />
                 </label>
             </div>

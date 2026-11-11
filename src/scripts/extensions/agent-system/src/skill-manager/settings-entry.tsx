@@ -1,7 +1,8 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
-import { deliverBlob } from '../../../../file-export.js';
+import { downloadBlobWithRuntime } from '../../../../file-export.js';
+import { isAndroidRuntime, isIosRuntime } from '../../../../util/mobile-runtime.js';
 import { subscribeAgentProfilesChanged } from '../../../../tauritavern/agent/agent-profile-events.js';
 import { confirmAction, errorText, requireAgentApi, requireSillyTavernContext, requireSkillApi } from '../host-api';
 import { translateAgentSystem as tr, translateSkillInstallAction } from '../i18n';
@@ -58,12 +59,12 @@ function createDeps(): SkillManagerDeps {
         getHostContext: getSkillHostContext,
         getSkillApi: requireSkillApi,
         confirmAction,
-        downloadExport: (blob, fileName, fallbackName) => deliverBlob(blob, fileName || fallbackName),
+        downloadExport: (blob, fileName, fallbackName) => downloadBlobWithRuntime(blob, fileName, { fallbackName }),
         syncInstallPortability: syncSkillInstallPortability,
         syncMovePortability: syncSkillMovePortability,
         syncWritePortability: syncSkillWritePortability,
         syncDeletePortability: syncSkillDeletePortability,
-        supportsDirectoryImport: requireSkillApi().isDirectoryImportAvailable(),
+        supportsDirectoryImport: !isAndroidRuntime() && !isIosRuntime(),
         errorText,
         reportError,
         logError: (message, error) => console.error(`[AgentSystem:SkillManager] ${message}:`, error),

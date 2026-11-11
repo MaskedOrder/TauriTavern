@@ -4,11 +4,9 @@ import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 
-test('discovery excludes unavailable manifests and activation preserves required renderer errors', async () => {
+test('required renderer activation preserves the original hook error while optional activation remains recoverable', async () => {
     const failure = new Error('Duplicate discriminator value "undefined"');
     const name = 'third-party/JS-Slash-Runner';
-    const missing = 'third-party/Deleted-Extension';
-    const invalid = 'third-party/LittleWhiteBox';
     const resourceUrl = (extension, path) => `/scripts/extensions/${extension}/${path}`;
     const manifest = { js: 'index.js', hooks: { activate: 'activate' } };
     let hookCalls = 0;
@@ -30,7 +28,6 @@ test('discovery excludes unavailable manifests and activation preserves required
             event_types: { EXTENSIONS_FIRST_LOAD: 'extensions_first_load' },
         },
         './templates.js': { renderTemplateAsync: noop },
-        './popup-menu.js': { initPopupMenu: noop },
         './utils.js': {
             delay: noop,
             equalsIgnoreCaseAndAccents: (left, right) => left.toLowerCase() === right.toLowerCase(),
@@ -44,6 +41,7 @@ test('discovery excludes unavailable manifests and activation preserves required
             getExtensionResourceUrl: resourceUrl,
             isThirdPartyExtension: extension => extension.startsWith('third-party/'),
         },
+        './extensions/runtime/tauri-ready.js': { waitForTauriMainReady: noop },
         [resourceUrl(name, manifest.js)]: {
             activate() {
                 hookCalls++;
@@ -61,31 +59,20 @@ test('discovery excludes unavailable manifests and activation preserves required
     runInNewContext(outputText, {
         exports: extensions,
         require: specifier => dependencies[specifier] ?? {},
-        console: { debug: noop, log: noop, warn: noop },
+        console: { debug: noop, log: noop },
         setInterval: noop,
         document: { body: {} },
         $: () => jquery,
         fetch: async url => {
             if (url === '/api/extensions/discover') {
-                return { ok: true, json: async () => [name, missing, invalid].map(name => ({ name, type: 'local' })) };
-            }
-            if (url === resourceUrl(missing, 'manifest.json')) {
-                return { ok: false, status: 404, statusText: 'Not Found' };
-            }
-            if (url === resourceUrl(invalid, 'manifest.json')) {
-                return { ok: true, json: async () => null };
+                return { ok: true, json: async () => [{ name, type: 'local' }] };
             }
             assert.equal(url, resourceUrl(name, 'manifest.json'));
             return { ok: true, json: async () => manifest };
         },
     });
 
-    const discovered = await extensions.startOfflineExtensionsDiscovery();
-    assert.deepEqual(Array.from(discovered, extension => extension.name), [name]);
-    assert.deepEqual(Array.from(extensions.extensionNames), [name]);
-    assert.deepEqual(Object.keys(extensions.extensionTypes), [name]);
-    assert.equal(extensions.findExtension(missing), null);
-    assert.equal(extensions.findExtension(invalid), null);
+    await extensions.startOfflineExtensionsDiscovery();
     await assert.rejects(extensions.activateRequiredChatSurfaceExtensions(), error => error === failure);
     assert.equal(hookCalls, 1);
 

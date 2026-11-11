@@ -182,7 +182,7 @@ async function installHarness(options = {}) {
     globalThis.window.__TAURITAVERN__.api.agent = createAgentApi({
         safeInvoke,
         loadScript: async () => options.script || createFakeStreamingCommitScript().script,
-    }).api;
+    });
 
     return {
         calls,
@@ -203,33 +203,6 @@ test('Agent run options preserve an explicit stream override and preserve omissi
         () => normalizeAgentRunOptions({ stream: 'true' }),
         /agent\.stream_invalid/,
     );
-});
-
-test('Agent event unsubscribe suppresses in-flight results, errors and the remainder of a batch', async (t) => {
-    const { createAgentRunRuntimeApi } = await import('../src/tauri/main/api/agent-run-runtime.js');
-    t.mock.timers.enable({ apis: ['setTimeout'] });
-    for (const outcome of ['result', 'error', 'batch']) {
-        const requested = Promise.withResolvers();
-        const reply = Promise.withResolvers();
-        const events = [];
-        const errors = [];
-        const runtime = createAgentRunRuntimeApi({
-            safeInvoke() { requested.resolve(); return reply.promise; },
-        });
-        const stop = runtime.subscribe('run', event => {
-            events.push(event.seq);
-            stop();
-        }, { onError: error => errors.push(error) });
-        t.mock.timers.tick(0);
-        await requested.promise;
-        if (outcome !== 'batch') stop();
-        if (outcome === 'error') reply.reject(new Error('late read failure'));
-        else reply.resolve({ events: [{ seq: 1 }, { seq: 2 }] });
-        // Drain the promise chain through the next event-loop turn; no sleeps.
-        await new Promise(resolve => setImmediate(resolve));
-        assert.deepEqual(events, outcome === 'batch' ? [1] : []);
-        assert.deepEqual(errors, []);
-    }
 });
 
 test('Agent live projection subscription owns Channel callbacks and detaches idempotently', async () => {
@@ -261,13 +234,13 @@ test('Agent live projection subscription owns Channel callbacks and detaches ide
         dto: { runId: 'run-live' },
         channel: { kind: 'test-channel' },
     });
-    onmessage({ type: 'snapshot', calls: [], responses: [] });
+    onmessage({ type: 'snapshot', calls: [], reasoning: [] });
     unsubscribe();
     unsubscribe();
     onmessage({ type: 'remove', invocationId: 'inv_root', toolCallIndex: 0 });
     resolveInvoke();
     await Promise.resolve();
-    assert.deepEqual(updates, [{ type: 'snapshot', calls: [], responses: [] }]);
+    assert.deepEqual(updates, [{ type: 'snapshot', calls: [], reasoning: [] }]);
 });
 
 test('Agent live projection subscription reports command rejection', async () => {
@@ -358,7 +331,6 @@ test('api.agent.startRunWithPromptSnapshot refreshes Model Target LLM connection
                 };
             }
             if (command === 'start_agent_run') {
-                assert.equal(args.dto.stableChatId, ' stable-chat-1\n');
                 return { runId: 'run-model-target' };
             }
             if (command === 'read_agent_run_events') {
@@ -396,7 +368,7 @@ test('api.agent.startRunWithPromptSnapshot refreshes Model Target LLM connection
 
     const handle = await agent.startRunWithPromptSnapshot({
         chatRef: { kind: 'character', characterId: 'char-1', fileName: 'Char.json' },
-        stableChatId: ' stable-chat-1\n',
+        stableChatId: 'stable-chat-1',
         generationType: 'normal',
         profileId: 'writer',
         promptSnapshot: {
@@ -547,7 +519,6 @@ test('api.agent.readTaskDetail requests result content explicitly and rejects in
 
 test('api.agent.listRuns fails fast on invalid history filters', async () => {
     const { calls, agent } = await installHarness();
-    await assert.rejects(agent.listRuns({ stableChatId: '' }));
 
     await assert.rejects(
         () => agent.listRuns(null),
@@ -638,11 +609,11 @@ test('agent live write keeps one real partial chat message and saves it on failu
         await waitFor(() => script.chat[0]?.mes === 'partial');
         const message = script.chat[0];
         assert.equal(message.extra.tauritavern.agent.runId, 'run-live-partial');
-        liveListener({ type: 'responseReplace', response: {
-            invocationId: 'inv_root', invocationExitPolicy: 'run_finish_allowed', round: 1, attempt: 1, text: 'Response body', reasoning: 'Plan', toolIds: [],
+        liveListener({ type: 'reasoningReplace', reasoning: {
+            invocationId: 'inv_root', invocationExitPolicy: 'run_finish_allowed', text: 'Plan', toolIds: [],
         } });
-        liveListener({ type: 'responseAppend', toolIds: [], invocationId: 'inv_root', text: '', reasoning: ' the edit' });
-        liveListener({ type: 'responseRemove', invocationId: 'inv_root' });
+        liveListener({ type: 'reasoningAppend', toolIds: [], invocationId: 'inv_root', text: ' the edit' });
+        liveListener({ type: 'reasoningRemove', invocationId: 'inv_root' });
         assert.equal(message.mes, 'partial');
 
         suspendFrames = true;
@@ -1257,7 +1228,7 @@ test('Agent resume attaches from its returned cursor and saves completed present
     const chatRef = { kind: 'character', characterId: 'Writer', fileName: 'story' };
     const script = createFakeCommitScript(({ getMessage }) => getMessage);
     const presentation = {
-        chatRef: { ...chatRef, fileName: 'before-rename' }, stableChatId: ' stable-story\n', generationType: 'swipe', liveEnabled: false,
+        chatRef: { ...chatRef, fileName: 'before-rename' }, stableChatId: 'stable-story', generationType: 'swipe', liveEnabled: false,
         chatLength: 0, messageId: null, swipeId: null, createdMessage: null,
         rawCommittedText: '', commitSeq: 0, pendingWrite: null, liveMessageEventsEmitted: false,
         reasoning: { commitInvocationIds: ['inv_root'], turns: [], cursor: 0 },
@@ -1269,7 +1240,7 @@ test('Agent resume attaches from its returned cursor and saves completed present
         calls.push({ command, args });
         if (command === 'read_agent_run_checkpoint') return {
             run: { runId: 'run-resume', generationType: 'swipe', status: 'cancelled' },
-            terminalSeq: 10, presentation, nextStep: 'model', blockedReason: null,
+            terminalSeq: 10, presentation, nextStep: 'model', round: 4, maxRounds: 5, blockedReason: null,
         };
         if (command === 'resume_agent_run') return { runId: 'run-resume', generationType: 'swipe', afterSeq: 10 };
         if (command === 'read_agent_run_events') {
@@ -1285,10 +1256,10 @@ test('Agent resume attaches from its returned cursor and saves completed present
     } });
     window.__TAURITAVERN__.api.chat = {
         current: { ref: () => chatRef },
-        open: () => ({ stableId: async () => ' stable-story\n' }),
+        open: () => ({ stableId: async () => 'stable-story' }),
     };
     const savedCheckpoint = await agent.readCheckpoint('run-resume');
-    const handle = await agent.resume({ runId: 'run-resume', checkpoint: savedCheckpoint });
+    const handle = await agent.resume({ runId: 'run-resume', additionalRounds: 5, checkpoint: savedCheckpoint });
     const settling = agent.settleChatPresentation(handle);
     const checkpoint = await saved;
     await settling;
@@ -1299,7 +1270,7 @@ test('Agent resume attaches from its returned cursor and saves completed present
     assert.deepEqual(checkpoint.presentation.reasoning.turns, [{ invocationId: 'inv_root', round: 4, maxChars: 17 }]);
     assert.equal(calls.filter(call => call.command === 'finish_agent_run_presentation').length, 1);
     assert.deepEqual(calls.find(call => call.command === 'resume_agent_run').args.dto, {
-        runId: 'run-resume', expectedTerminalSeq: 10, chatRef, stableChatId: ' stable-story\n', hostPresentation: true,
+        runId: 'run-resume', expectedTerminalSeq: 10, chatRef, stableChatId: 'stable-story', additionalRounds: 5, hostPresentation: true,
     });
 });
 
@@ -1381,7 +1352,7 @@ test('Checkpoint publication can be retried through the Agent API after failure'
     const { agent } = await installHarness({ script, safeInvoke: async (command, args) => {
         if (command === 'read_agent_run_checkpoint') return {
             run: { runId: 'run-save-retry', status: 'cancelled' },
-            terminalSeq: 10, presentation, nextStep: 'model',
+            terminalSeq: 10, presentation, nextStep: 'model', round: 2, maxRounds: 5,
         };
         if (command === 'resume_agent_run') return { runId: 'run-save-retry', afterSeq: 10 };
         if (command === 'read_agent_run_events') return { events: [

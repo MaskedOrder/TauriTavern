@@ -6,7 +6,12 @@ use tt_ports::repositories::chat_repository::{
 };
 
 use super::{FileChatRepository, classify_message_role};
-use crate::chat_jsonl::parse_record;
+
+fn parse_message_line(line: &str) -> Result<Value, DomainError> {
+    serde_json::from_str::<Value>(line).map_err(|error| {
+        DomainError::InvalidData(format!("Failed to parse chat message JSON: {}", error))
+    })
+}
 
 fn matches_role(message: &Value, role: ChatMessageRole) -> bool {
     let declared_role = message.get("role").and_then(Value::as_str);
@@ -72,7 +77,7 @@ impl FileChatRepository {
         let required_extra = query.has_extra_keys.unwrap_or_default();
 
         for (from_end, line) in lines.iter().rev().enumerate() {
-            let message = parse_record(line.as_bytes())?;
+            let message = parse_message_line(line)?;
 
             if let Some(role) = query.role
                 && !matches_role(&message, role)
@@ -120,7 +125,7 @@ impl FileChatRepository {
         let required_extra = query.has_extra_keys.unwrap_or_default();
 
         for (from_end, line) in lines.iter().rev().enumerate() {
-            let message = parse_record(line.as_bytes())?;
+            let message = parse_message_line(line)?;
 
             if let Some(role) = query.role
                 && !matches_role(&message, role)

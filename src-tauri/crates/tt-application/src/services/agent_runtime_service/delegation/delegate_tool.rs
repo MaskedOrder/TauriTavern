@@ -3,7 +3,8 @@ use std::time::Instant;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use super::policy::AgentOperation;
+use super::policy::validate_subagent_target;
+use super::tool_error::tool_error_outcome;
 use crate::errors::ApplicationError;
 use crate::services::agent_profile_service::AgentProfileResolveInput;
 use crate::services::agent_runtime_service::AgentCancelReceiver;
@@ -36,16 +37,16 @@ impl AgentRuntimeService {
         let args = match serde_json::from_value::<AgentDelegateArgs>(Value::Object(args.clone())) {
             Ok(args) => args,
             Err(error) => {
-                return Ok(AgentToolDispatchOutcome::error(
+                return Ok(tool_error_outcome(
                     call,
                     "tool.invalid_arguments",
-                    &format!("Invalid agent_delegate arguments: {error}"),
+                    &format!("invalid agent.delegate arguments: {error}"),
                     started.elapsed().as_millis(),
                 ));
             }
         };
         if let Err(message) = validate_delegate_task_packet(&args.task) {
-            return Ok(AgentToolDispatchOutcome::error(
+            return Ok(tool_error_outcome(
                 call,
                 "tool.invalid_arguments",
                 &message,
@@ -53,26 +54,25 @@ impl AgentRuntimeService {
             ));
         }
         if !profile.delegation.can_delegate {
-            return Ok(AgentToolDispatchOutcome::error(
+            return Ok(tool_error_outcome(
                 call,
                 "agent.delegation_policy_denied",
-                "Delegation is not available to you.",
+                &format!(
+                    "agent.profile_cannot_delegate: profile `{}` cannot delegate to subagents",
+                    profile.id.as_str()
+                ),
                 started.elapsed().as_millis(),
             ));
         }
         let target_id = match AgentProfileId::parse(&args.agent_id) {
             Ok(target_id) => target_id,
-            Err(_) => {
-                return self
-                    .agent_target_error(
-                        call,
-                        profile,
-                        AgentOperation::Delegate,
-                        "tool.invalid_arguments",
-                        "Invalid agentId. Use an ID from the available agents below.",
-                        started,
-                    )
-                    .await;
+            Err(message) => {
+                return Ok(tool_error_outcome(
+                    call,
+                    "tool.invalid_arguments",
+                    &message,
+                    started.elapsed().as_millis(),
+                ));
             }
         };
         let target = match self
@@ -84,37 +84,29 @@ impl AgentRuntimeService {
             .await
         {
             Ok(target) => target,
-            Err(ApplicationError::NotFound(_)) => {
-                return self
-                    .agent_target_error(
-                        call,
-                        profile,
-                        AgentOperation::Delegate,
-                        "agent.target_profile_not_found",
-                        &format!("Agent `{}` is unavailable.", target_id.as_str()),
-                        started,
-                    )
-                    .await;
+            Err(ApplicationError::NotFound(message)) => {
+                return Ok(tool_error_outcome(
+                    call,
+                    "agent.target_profile_not_found",
+                    &message,
+                    started.elapsed().as_millis(),
+                ));
             }
             Err(error) => return Err(error),
         };
-        if let Err(message) = AgentOperation::Delegate.validate_target(profile, &target) {
-            return self
-                .agent_target_error(
-                    call,
-                    profile,
-                    AgentOperation::Delegate,
-                    "agent.delegation_policy_denied",
-                    &message,
-                    started,
-                )
-                .await;
+        if let Err(message) = validate_subagent_target(profile, &target) {
+            return Ok(tool_error_outcome(
+                call,
+                "agent.delegation_policy_denied",
+                &message,
+                started.elapsed().as_millis(),
+            ));
         }
         if let Err(message) = self
             .validate_parent_delegate_budget(run_id, invocation_id, profile)
             .await?
         {
-            return Ok(AgentToolDispatchOutcome::error(
+            return Ok(tool_error_outcome(
                 call,
                 "agent.delegation_budget_exhausted",
                 &message,
@@ -154,19 +146,23 @@ impl AgentRuntimeService {
             "status": task.status,
             "agentId": target.id.as_str(),
         });
-        Ok(AgentToolDispatchOutcome::new(
-            AgentToolResult::ok(
-                call,
-                format!(
+        Ok(AgentToolDispatchOutcome {
+            result: AgentToolResult {
+                call_id: call.call_id.clone(),
+                tool_id: call.tool_id.clone(),
+                content: format!(
                     "Started delegated task `{}` with Agent `{}`. You can continue other work and call `agent_await` when you need its result or current status.",
                     structured["taskId"].as_str().unwrap_or(""),
                     target.id.as_str()
                 ),
                 structured,
-            ),
-            AgentToolEffect::None,
-            started.elapsed().as_millis(),
-        ))
+                is_error: false,
+                error_code: None,
+                resource_refs: Vec::new(),
+            },
+            effect: AgentToolEffect::None,
+            elapsed_ms: started.elapsed().as_millis(),
+        })
     }
 
     async fn validate_parent_delegate_budget(
@@ -182,7 +178,8 @@ impl AgentRuntimeService {
             .collect::<Vec<_>>();
         if owned.len() >= profile.delegation.max_invocations_per_run {
             return Ok(Err(format!(
-                "You have reached the limit of {} delegated tasks.",
+                "agent.max_invocations_per_run_exhausted: profile `{}` may create at most {} subagent tasks per run",
+                profile.id.as_str(),
                 profile.delegation.max_invocations_per_run
             )));
         }
@@ -197,7 +194,8 @@ impl AgentRuntimeService {
             .count();
         if pending >= profile.delegation.max_concurrent_invocations {
             return Ok(Err(format!(
-                "The limit of {} concurrent delegated tasks has been reached. Wait for a task to finish before starting another.",
+                "agent.max_concurrent_invocations_exhausted: profile `{}` may run at most {} concurrent subagent tasks",
+                profile.id.as_str(),
                 profile.delegation.max_concurrent_invocations
             )));
         }

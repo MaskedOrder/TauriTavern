@@ -67,12 +67,12 @@ function streamingWrite(lane: RunTimelineLiveLane, state: { handler: LiveHandler
     lane.attach('run-1');
     const handler = state.handler;
     if (!handler) throw new Error('expected the lane to subscribe');
-    handler({ type: 'snapshot', calls: [], responses: [] });
+    handler({ type: 'snapshot', calls: [], reasoning: [] });
     handler({ type: 'replace', call: writeCall('') });
     return handler;
 }
 
-test('streams a foreground write call with a line-based tail', () => {
+test('streams a foreground write call into a double-height card with a line-based tail', () => {
     const { lane, state } = harness();
     const handler = streamingWrite(lane, state);
     handler({
@@ -88,6 +88,7 @@ test('streams a foreground write call with a line-based tail', () => {
     expect(items).toHaveLength(1);
     const item = items[0];
     if (!item) throw new Error('expected the live item');
+    expect(item.rowSpan).toBe(2);
     expect(item.kind).toBe('write');
     expect(item.titleKey).toBe('timelineLiveWriting');
     expect(item.titleParams).toEqual({ path: 'reply.md' });
@@ -121,7 +122,7 @@ test('keeps a bounded rolling tail across large snapshots and deltas', () => {
     lane.attach('run-1');
     const handler = state.handler;
     if (!handler) throw new Error('expected the lane to subscribe');
-    handler({ type: 'snapshot', responses: [], calls: [writeCall('x'.repeat(500), { contentWords: 1 })] });
+    handler({ type: 'snapshot', reasoning: [], calls: [writeCall('x'.repeat(500), { contentWords: 1 })] });
     handler({ type: 'append', invocationId: 'inv_root', toolCallIndex: 0, field: 'content', text: 'y', wordDelta: 1 });
 
     expect(lane.items()[0]?.live).toMatchObject({
@@ -136,7 +137,7 @@ test('ignores SubAgent updates without publishing and replaces retry generations
     lane.attach('run-1');
     const handler = state.handler;
     if (!handler) throw new Error('expected the lane to subscribe');
-    handler({ type: 'snapshot', calls: [], responses: [] });
+    handler({ type: 'snapshot', calls: [], reasoning: [] });
     handler({ type: 'replace', call: writeCall('hidden', { invocationExitPolicy: 'task_return_required' }) });
     expect(lane.items()).toHaveLength(0);
 
@@ -156,7 +157,7 @@ test('remove immediately deletes only the addressed live call', () => {
     if (!handler) throw new Error('expected the lane to subscribe');
     handler({
         type: 'snapshot',
-        responses: [],
+        reasoning: [],
         calls: [
             writeCall('first', { toolCallIndex: 0 }),
             writeCall('second', { toolCallIndex: 1 }),
@@ -196,7 +197,7 @@ test('patch cards follow the arriving field: red while locating, green while wri
     lane.attach('run-1');
     const handler = state.handler;
     if (!handler) throw new Error('expected the lane to subscribe');
-    handler({ type: 'snapshot', responses: [], calls: [patchCall()] });
+    handler({ type: 'snapshot', reasoning: [], calls: [patchCall()] });
 
     handler({
         type: 'append',
@@ -235,30 +236,29 @@ test('patch cards follow the arriving field: red while locating, green while wri
 test('reasoning shares the live lane, stays bounded, and replaces retries independently of tools', () => {
     const { lane, state } = harness();
     const handler = streamingWrite(lane, state);
-    const reasoning: TauriTavernAgentRunLiveResponse = {
-        invocationId: 'inv_root', invocationExitPolicy: 'run_finish_allowed', round: 1, attempt: 1,
-        text: 'Body never enters the writing timeline', reasoning: 'l1\nl2\nl3', toolIds: [],
+    const reasoning: TauriTavernAgentRunLiveReasoning = {
+        invocationId: 'inv_root', invocationExitPolicy: 'run_finish_allowed', text: 'l1\nl2\nl3', toolIds: [],
     };
-    handler({ type: 'snapshot', calls: [writeCall('body')], responses: [reasoning] });
-    handler({ type: 'responseAppend', toolIds: [], invocationId: 'inv_root', text: '', reasoning: '\n思考' });
+    handler({ type: 'snapshot', calls: [writeCall('body')], reasoning: [reasoning] });
+    handler({ type: 'reasoningAppend', toolIds: [], invocationId: 'inv_root', text: '\n思考' });
     expect(lane.items()[0]?.live).toMatchObject({ tail: '…l2\nl3\n思考', truncated: true, streamTone: 'reasoning', toolLabel: '', expanded: false });
-    handler({ type: 'responseAppend', invocationId: 'inv_root', text: '', reasoning: '', toolIds: ['builtin:workspace.read_file'] });
+    handler({ type: 'reasoningAppend', invocationId: 'inv_root', text: '', toolIds: ['builtin:workspace.read_file'] });
     expect(lane.items()[0]?.live).toMatchObject({ toolLabel: 'reading a file', tail: '…l2\nl3\n思考' });
-    handler({ type: 'responseAppend', invocationId: 'inv_root', text: '', reasoning: '', toolIds: ['mcp/a:search', 'mcp/b:search'] });
+    handler({ type: 'reasoningAppend', invocationId: 'inv_root', text: '', toolIds: ['mcp/a:search', 'mcp/b:search'] });
     expect(lane.items()[0]?.live).toMatchObject({ toolLabel: 'reading a file · search [mcp/a:search] · search [mcp/b:search]' });
-    handler({ type: 'responseReplace', response: { ...reasoning, invocationId: 'child', invocationExitPolicy: 'task_return_required' } });
-    handler({ type: 'responseAppend', toolIds: [], invocationId: 'child', text: '', reasoning: 'hidden' });
+    handler({ type: 'reasoningReplace', reasoning: { ...reasoning, invocationId: 'child', invocationExitPolicy: 'task_return_required' } });
+    handler({ type: 'reasoningAppend', toolIds: [], invocationId: 'child', text: 'hidden' });
     expect(lane.items()).toHaveLength(2);
     const item = lane.items()[0];
     if (!item) throw new Error('expected reasoning preview');
     lane.toggleExpanded(item.id);
-    handler({ type: 'responseAppend', toolIds: [], invocationId: 'inv_root', text: '', reasoning: '\nmore' });
+    handler({ type: 'reasoningAppend', toolIds: [], invocationId: 'inv_root', text: '\nmore' });
     expect(lane.items()[0]?.live).toMatchObject({ expanded: true, blocks: [{ text: 'l1\nl2\nl3\n思考\nmore' }] });
-    handler({ type: 'responseReplace', response: { ...reasoning, attempt: 2, reasoning: 'retry' } });
+    handler({ type: 'reasoningReplace', reasoning: { ...reasoning, text: 'retry' } });
     expect(lane.items()[0]?.live).toMatchObject({ tail: 'retry', toolLabel: '', expanded: false });
-    handler({ type: 'responseRemove', invocationId: 'inv_root' });
+    handler({ type: 'reasoningRemove', invocationId: 'inv_root' });
     expect(lane.items().map(item => item.live?.tail)).toEqual(['body']);
-    handler({ type: 'responseReplace', response: reasoning });
-    handler({ type: 'snapshot', calls: [], responses: [] });
+    handler({ type: 'reasoningReplace', reasoning });
+    handler({ type: 'snapshot', calls: [], reasoning: [] });
     expect(lane.items()).toEqual([]);
 });

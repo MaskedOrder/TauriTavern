@@ -135,10 +135,7 @@ fn reject_incomplete_response(response: &Value) -> Result<(), ApplicationError> 
                 "model.provider_refusal: {explanation}"
             )))
         }
-        Some("model_context_window_exceeded") => Err(ApplicationError::ValidationError(
-            "model.context_overflow: provider reached the model context window".to_string(),
-        )),
-        Some(reason @ ("max_tokens" | "length")) => {
+        Some(reason @ ("max_tokens" | "length" | "model_context_window_exceeded")) => {
             Err(ApplicationError::ValidationError(format!(
                 "model.output_truncated: provider stopped before completing the Agent turn ({reason})"
             )))

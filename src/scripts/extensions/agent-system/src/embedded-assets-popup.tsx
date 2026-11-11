@@ -72,6 +72,7 @@ export function openEmbeddedAssetsPanel(target: EmbeddedAssetTargetInput): void 
         throw new Error(tr('agentAssetsDialogUnsupported'));
     }
     dialog.className = 'ttas-dialog ttas-embed-dialog';
+    dialog.setAttribute('data-tt-mobile-surface', 'fullscreen-window');
 
     const mount = document.createElement('div');
     mount.className = 'ttas-popup-mount ttas-embed-popup-mount';

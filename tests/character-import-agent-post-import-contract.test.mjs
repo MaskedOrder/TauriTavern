@@ -5,9 +5,10 @@ import { jsonResponse, textResponse } from '../src/tauri/main/http-utils.js';
 import { createRouteRegistry } from '../src/tauri/main/router.js';
 import { registerCharacterRoutes } from '../src/tauri/main/routes/character-routes.js';
 
-test('/api/characters/import returns character data, lorebook adoption and Agent post-import hints', async () => {
+test('/api/characters/import returns canonical character payload and Agent post-import hints', async () => {
     const router = createRouteRegistry();
-    const imported = {
+    const imported = { name: 'Alice', avatar: 'Alice.png' };
+    const normalized = {
         name: 'Alice',
         avatar: 'Alice.png',
         data: {
@@ -26,11 +27,28 @@ test('/api/characters/import returns character data, lorebook adoption and Agent
             },
         },
     };
+    const calls = [];
     const context = {
-        materializeUploadFile: async () => ({ filePath: '/tmp/Alice.png' }),
-        safeInvoke: async () => ({ character: imported, lorebook: { status: 'none' } }),
-        normalizeCharacter: character => character,
-        invalidateCharacterCache: () => {},
+        materializeUploadFile: async (file, options) => {
+            calls.push({
+                type: 'materialize',
+                fileName: file.name,
+                options,
+            });
+            return {
+                filePath: '/tmp/Alice.png',
+                cleanup: async () => calls.push({ type: 'cleanup' }),
+            };
+        },
+        safeInvoke: async (command, args) => {
+            calls.push({ type: 'invoke', command, args });
+            return imported;
+        },
+        normalizeCharacter: (character) => {
+            calls.push({ type: 'normalize', character });
+            return normalized;
+        },
+        invalidateCharacterCache: () => calls.push({ type: 'invalidate' }),
     };
 
     registerCharacterRoutes(router, context, { textResponse, jsonResponse });
@@ -46,17 +64,41 @@ test('/api/characters/import returns character data, lorebook adoption and Agent
         body,
     });
 
+    assert.ok(response);
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), {
         file_name: 'Alice',
         replaced: false,
-        character: imported,
-        lorebook: { status: 'none' },
+        character: normalized,
         post_import: {
             has_agent_profiles: true,
             has_agent_skills: true,
         },
     });
+    assert.deepEqual(calls, [
+        {
+            type: 'materialize',
+            fileName: 'Alice.png',
+            options: {
+                kind: 'character-import',
+                preferredName: 'Alice.png',
+                preferredExtension: 'png',
+            },
+        },
+        {
+            type: 'invoke',
+            command: 'import_character',
+            args: {
+                dto: {
+                    file_path: '/tmp/Alice.png',
+                    preserve_file_name: null,
+                },
+            },
+        },
+        { type: 'cleanup' },
+        { type: 'normalize', character: imported },
+        { type: 'invalidate' },
+    ]);
 });
 
 test('/api/characters/import uses the explicit replacement command for an existing exact avatar', async () => {
@@ -64,13 +106,16 @@ test('/api/characters/import uses the explicit replacement command for an existi
     const calls = [];
     const imported = { name: 'Updated Alice', avatar: 'Alice.png' };
     const context = {
-        materializeUploadFile: async () => ({ filePath: '/tmp/update.png' }),
+        materializeUploadFile: async () => ({
+            filePath: '/tmp/update.png',
+            cleanup: async () => calls.push({ type: 'cleanup' }),
+        }),
         safeInvoke: async (command, args) => {
-            calls.push({ command, args });
-            return { character: imported, lorebook: { status: 'none' } };
+            calls.push({ type: 'invoke', command, args });
+            return imported;
         },
         normalizeCharacter: character => character,
-        invalidateCharacterCache: () => {},
+        invalidateCharacterCache: () => calls.push({ type: 'invalidate' }),
     };
     registerCharacterRoutes(router, context, { textResponse, jsonResponse });
 
@@ -89,9 +134,12 @@ test('/api/characters/import uses the explicit replacement command for an existi
     assert.equal((await response.json()).replaced, true);
     assert.deepEqual(calls, [
         {
+            type: 'invoke',
             command: 'replace_character',
             args: { dto: { file_path: '/tmp/update.png', name: 'Alice' } },
         },
+        { type: 'cleanup' },
+        { type: 'invalidate' },
     ]);
 });
 
@@ -100,16 +148,19 @@ test('/api/characters/import preserves an exact name when there is no character 
     const calls = [];
     const imported = { name: 'Alice', avatar: 'Alice.png' };
     const context = {
-        materializeUploadFile: async () => ({ filePath: '/tmp/Alice.png' }),
+        materializeUploadFile: async () => ({
+            filePath: '/tmp/Alice.png',
+            cleanup: async () => calls.push({ type: 'cleanup' }),
+        }),
         safeInvoke: async (command, args) => {
-            calls.push({ command, args });
+            calls.push({ type: 'invoke', command, args });
             if (command === 'replace_character') {
                 throw new Error('Not found: Character not found: Alice');
             }
-            return { character: imported, lorebook: { status: 'none' } };
+            return imported;
         },
         normalizeCharacter: character => character,
-        invalidateCharacterCache: () => {},
+        invalidateCharacterCache: () => calls.push({ type: 'invalidate' }),
     };
     registerCharacterRoutes(router, context, { textResponse, jsonResponse });
 
@@ -128,10 +179,12 @@ test('/api/characters/import preserves an exact name when there is no character 
     assert.equal((await response.json()).replaced, false);
     assert.deepEqual(calls, [
         {
+            type: 'invoke',
             command: 'replace_character',
             args: { dto: { file_path: '/tmp/Alice.png', name: 'Alice' } },
         },
         {
+            type: 'invoke',
             command: 'import_character',
             args: {
                 dto: {
@@ -140,8 +193,12 @@ test('/api/characters/import preserves an exact name when there is no character 
                 },
             },
         },
+        { type: 'cleanup' },
+        { type: 'invalidate' },
     ]);
 });
+
+
 
 test('/api/characters/import rejects non-exact preserved avatar identities before staging', async () => {
     const router = createRouteRegistry();

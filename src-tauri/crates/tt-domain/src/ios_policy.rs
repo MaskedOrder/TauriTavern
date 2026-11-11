@@ -6,8 +6,20 @@ use crate::models::chat_completion_source::ChatCompletionSource;
 
 pub const IOS_POLICY_VERSION: u32 = 1;
 
-pub fn ios_policy_seed(profile: IosPolicyProfile) -> Value {
-    serde_json::json!({ "version": IOS_POLICY_VERSION, "profile": profile })
+fn ios_build_default_profile() -> Option<IosPolicyProfile> {
+    if !cfg!(target_os = "ios") {
+        return None;
+    }
+
+    match env!("TAURITAVERN_IOS_POLICY_PROFILE").trim() {
+        "" => None,
+        "full" => Some(IosPolicyProfile::Full),
+        "ios_internal_full" => Some(IosPolicyProfile::IosInternalFull),
+        "ios_external_beta" => Some(IosPolicyProfile::IosExternalBeta),
+        value => panic!(
+            "TAURITAVERN_IOS_POLICY_PROFILE embedded value {value:?} is unsupported. Expected one of: full, ios_internal_full, ios_external_beta."
+        ),
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -15,6 +27,16 @@ pub fn ios_policy_seed(profile: IosPolicyProfile) -> Value {
 pub enum IosPolicyScope {
     Ios,
     Ignored,
+}
+
+impl IosPolicyScope {
+    pub fn for_current_platform() -> Self {
+        if cfg!(target_os = "ios") {
+            Self::Ios
+        } else {
+            Self::Ignored
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -535,7 +557,6 @@ impl IosPolicyCapabilitiesOverride {
 pub fn resolve_ios_policy_activation_report(
     scope: IosPolicyScope,
     raw_policy: Option<&Value>,
-    factory_profile: Option<IosPolicyProfile>,
 ) -> Result<IosPolicyActivationReport, DomainError> {
     if scope == IosPolicyScope::Ignored {
         let capabilities = IosPolicyCapabilities::baseline(IosPolicyProfile::Full);
@@ -549,7 +570,7 @@ pub fn resolve_ios_policy_activation_report(
     }
 
     let Some(raw_policy) = raw_policy else {
-        let profile = factory_profile.unwrap_or(IosPolicyProfile::Full);
+        let profile = ios_build_default_profile().unwrap_or(IosPolicyProfile::Full);
         let capabilities = IosPolicyCapabilities::baseline(profile);
         return Ok(IosPolicyActivationReport {
             version: IOS_POLICY_VERSION,
@@ -601,7 +622,6 @@ mod tests {
                     }
                 }
             })),
-            None,
         )
         .unwrap();
 
@@ -626,7 +646,6 @@ mod tests {
                     }
                 }
             })),
-            None,
         )
         .unwrap_err();
 
@@ -651,7 +670,6 @@ mod tests {
                     }
                 }
             })),
-            None,
         )
         .unwrap();
 

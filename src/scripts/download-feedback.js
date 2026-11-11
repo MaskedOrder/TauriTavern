@@ -3,8 +3,37 @@ import { t } from './i18n.js';
 const DEFAULT_EXPORT_SUCCESS_TIMEOUT = 7000;
 const DEFAULT_EXPORT_FAILURE_TIMEOUT = 10000;
 
-export function getExportSuccessMessage() {
-    return t`Export completed.`;
+function isIosNativeShareResult(result) {
+    return result?.mode === 'ios-native-share';
+}
+
+function isAndroidDocumentPickerResult(result) {
+    return result?.mode === 'android-document-picker';
+}
+
+function resolveExportDestination(savedPath) {
+    const normalizedPath = String(savedPath || '').trim();
+    if (!normalizedPath) {
+        return '';
+    }
+
+    const directory = normalizedPath.replace(/[\\/][^\\/]*$/, '');
+    return directory || normalizedPath;
+}
+
+export function getExportSuccessMessage(result) {
+    if (isIosNativeShareResult(result)) {
+        return t`Export completed.`;
+    }
+
+    if (isAndroidDocumentPickerResult(result)) {
+        return t`Export completed.`;
+    }
+
+    const destination = resolveExportDestination(result?.savedPath);
+    return destination
+        ? t`Exported to: ${destination}`
+        : t`Export started. Check your default download folder.`;
 }
 
 export function showExportSuccessToast(
@@ -15,7 +44,7 @@ export function showExportSuccessToast(
         timeOut = DEFAULT_EXPORT_SUCCESS_TIMEOUT,
     } = {},
 ) {
-    if (result?.delivered !== true) {
+    if (isIosNativeShareResult(result) && result?.completed !== true) {
         return;
     }
 
@@ -23,7 +52,7 @@ export function showExportSuccessToast(
         return;
     }
 
-    toastrInstance.success(getExportSuccessMessage(), title, { timeOut });
+    toastrInstance.success(getExportSuccessMessage(result), title, { timeOut });
 }
 
 function resolveExportFailureMessage(error) {

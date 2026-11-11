@@ -19,7 +19,7 @@ pub(super) async fn consume_generate_content_stream(
     })
     .await?;
 
-    Ok(accumulator.finish())
+    accumulator.finish()
 }
 
 pub(super) async fn stream_generate_content_with_native(
@@ -42,8 +42,7 @@ pub(super) async fn stream_generate_content_with_native(
     }
 
     // Keep Gemini deltas unchanged; publish the complete native turn for history replay.
-    let normalized =
-        super::normalizers::normalize_gemini_response(provider_name, accumulator.finish())?.body;
+    let normalized = super::normalizers::normalize_gemini_response(accumulator.finish()?).body;
     if let Some(native) = normalized.pointer("/choices/0/message/native") {
         let _ = sender.send(
             serde_json::json!({
@@ -58,7 +57,7 @@ pub(super) async fn stream_generate_content_with_native(
 #[derive(Default)]
 struct GeminiStreamAccumulator {
     response: Map<String, Value>,
-    candidate: Option<Map<String, Value>>,
+    candidate: Map<String, Value>,
     content: Map<String, Value>,
     parts: Vec<Value>,
     tool_call_count: usize,
@@ -97,7 +96,7 @@ impl GeminiStreamAccumulator {
             return Err(invalid_stream("candidate must be an object"));
         };
         let content = candidate.remove("content");
-        self.candidate.get_or_insert_default().extend(candidate);
+        self.candidate.extend(candidate);
 
         let mut content = match content {
             None | Some(Value::Null) => return Ok(()),
@@ -157,14 +156,8 @@ impl GeminiStreamAccumulator {
             return;
         }
 
-        if !text.is_empty() {
-            on_delta(
-                if part.get("thought").and_then(Value::as_bool) == Some(true) {
-                    ChatCompletionStreamDelta::Reasoning { text: text.clone() }
-                } else {
-                    ChatCompletionStreamDelta::Text { text: text.clone() }
-                },
-            );
+        if part.get("thought").and_then(Value::as_bool) == Some(true) && !text.is_empty() {
+            on_delta(ChatCompletionStreamDelta::Reasoning { text: text.clone() });
         }
 
         if merge_with_previous
@@ -182,17 +175,25 @@ impl GeminiStreamAccumulator {
         self.parts.push(Value::Object(part));
     }
 
-    fn finish(mut self) -> Value {
-        if let Some(mut candidate) = self.candidate {
-            self.content
-                .insert("parts".to_string(), Value::Array(self.parts));
-            candidate.insert("content".to_string(), Value::Object(self.content));
-            self.response.insert(
-                "candidates".to_string(),
-                Value::Array(vec![Value::Object(candidate)]),
-            );
+    fn finish(mut self) -> Result<Value, DomainError> {
+        if self
+            .candidate
+            .get("finishReason")
+            .and_then(Value::as_str)
+            .is_none()
+        {
+            return Err(invalid_stream("ended without a finish reason"));
         }
-        Value::Object(self.response)
+
+        self.content
+            .insert("parts".to_string(), Value::Array(self.parts));
+        self.candidate
+            .insert("content".to_string(), Value::Object(self.content));
+        self.response.insert(
+            "candidates".to_string(),
+            Value::Array(vec![Value::Object(self.candidate)]),
+        );
+        Ok(Value::Object(self.response))
     }
 }
 
@@ -214,7 +215,7 @@ mod tests {
             json!({"candidates":[{"content":{"role":"model","parts":[{"text":"Plan ","thought":true}]}}],"modelVersion":"gemini-test"}),
             json!({"candidates":[{"content":{"role":"model","parts":[{"text":"then act","thought":true,"thoughtSignature":"sig"}]}}]}),
             json!({"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"id":"call_1","name":"write_file","args":{"path":"a.md","content":"hello"}},"thoughtSignature":"call-sig"}]}}]}),
-            json!({"candidates":[{"content":{"role":"model","parts":[{"text":"Done"}]},"finishReason":"STOP"}],"usageMetadata":{"totalTokenCount":12}}),
+            json!({"candidates":[{"content":{"role":"model","parts":[{"text":""}]},"finishReason":"STOP"}],"usageMetadata":{"totalTokenCount":12}}),
         ];
         let mut accumulator = GeminiStreamAccumulator::default();
         let mut deltas = Vec::new();
@@ -239,14 +240,11 @@ mod tests {
                     tool_call_index: 0,
                     name: "write_file".to_string(),
                     arguments_fragment: "{\"content\":\"hello\",\"path\":\"a.md\"}".to_string(),
-                },
-                ChatCompletionStreamDelta::Text {
-                    text: "Done".into()
                 }
             ]
         );
 
-        let response = accumulator.finish();
+        let response = accumulator.finish().unwrap();
         assert_eq!(response["modelVersion"], "gemini-test");
         assert_eq!(response["usageMetadata"]["totalTokenCount"], 12);
         assert_eq!(response["candidates"][0]["finishReason"], "STOP");
@@ -265,8 +263,7 @@ mod tests {
                         "args": { "path": "a.md", "content": "hello" }
                     },
                     "thoughtSignature": "call-sig"
-                },
-                { "text": "Done" }
+                }
             ])
         );
     }

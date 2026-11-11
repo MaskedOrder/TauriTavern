@@ -74,7 +74,7 @@ export async function exportSkillArchive(
 ): Promise<boolean> {
     const payload = await deps.getSkillApi().export({ scope, name: skill.name });
     const result = await deps.downloadExport(skillArchiveBlob(payload.contentBase64), payload.fileName, `${skill.name}.zip`);
-    return result.delivered;
+    return result.mode !== 'ios-native-share' || result.completed === true;
 }
 
 export async function deleteSkillMutation(

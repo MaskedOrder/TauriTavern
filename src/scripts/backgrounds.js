@@ -1,4 +1,3 @@
-import { applyWindowBackdrop } from './window-backdrop.js';
 import { Fuse, localforage } from '../lib.js';
 import { characters, chat_metadata, eventSource, event_types, generateQuietPrompt, getCurrentChatId, getRequestHeaders, getThumbnailUrl, saveMetadata, saveSettingsDebounced, this_chid } from '../script.js';
 import { openThirdPartyExtensionMenu, saveMetadataDebounced } from './extensions.js';
@@ -326,7 +325,7 @@ export function loadBackgroundSettings(settings) {
  */
 async function forceSetBackground(backgroundInfo) {
     saveBackgroundMetadata(backgroundInfo.url);
-    applyWindowBackdrop({ image: backgroundInfo.url });
+    $('#bg1').css('background-image', backgroundInfo.url);
 
     const list = chat_metadata[LIST_METADATA_KEY] || [];
     const bg = backgroundInfo.path;
@@ -341,7 +340,7 @@ async function forceSetBackground(backgroundInfo) {
 async function onChatChanged() {
     const lockedUrl = chat_metadata[BG_METADATA_KEY];
 
-    applyWindowBackdrop({ image: lockedUrl || background_settings.url });
+    $('#bg1').css('background-image', lockedUrl || background_settings.url);
 
     renderChatBackgrounds();
     highlightLockedBackground();
@@ -407,7 +406,7 @@ function onLockBackgroundClick(event = null) {
     // Take the global background's URL and save it to the chat's metadata.
     const urlToLock = event ? $(event.target).closest('.bg_example').data('url') : background_settings.url;
     saveBackgroundMetadata(urlToLock);
-    applyWindowBackdrop({ image: urlToLock });
+    $('#bg1').css('background-image', urlToLock);
 
     // Update UI states to reflect the new lock.
     highlightLockedBackground();
@@ -423,7 +422,7 @@ function onUnlockBackgroundClick(_event = null) {
     removeBackgroundMetadata();
 
     // Revert the view to the current global background.
-    applyWindowBackdrop({ image: background_settings.url });
+    $('#bg1').css('background-image', background_settings.url);
 
     // Update UI states to reflect the removal of the lock.
     highlightLockedBackground();
@@ -464,7 +463,7 @@ function onSelectBackgroundClick(e) {
     if ((isChatBackgroundLocked() || isCustom) && !bypassGlobalLock) {
         // If a background is locked, update the locked background directly
         saveBackgroundMetadata(backgroundCssUrl);
-        applyWindowBackdrop({ image: backgroundCssUrl });
+        $('#bg1').css('background-image', backgroundCssUrl);
     } else {
         // Otherwise, update the global background setting
         setBackground(bgFile, backgroundCssUrl);
@@ -1613,7 +1612,7 @@ async function resolveImageUrl(bg, isCustom, isAnimated = null) {
 async function setBackground(bg, url) {
     // Only change the visual background if one is not locked for the current chat.
     if (!isChatBackgroundLocked()) {
-        applyWindowBackdrop({ image: url });
+        $('#bg1').css('background-image', url);
     }
     background_settings.name = bg;
     background_settings.url = url;
@@ -1751,7 +1750,7 @@ async function uploadBackground(formData) {
     try {
         const nextUrl = generateUrlParameter(bg, false);
         if (!isChatBackgroundLocked() && background_settings.url === nextUrl) {
-            applyWindowBackdrop({ image: 'none' });
+            $('#bg1').css('background-image', 'none');
             await new Promise(resolve => requestAnimationFrame(resolve));
         }
         setBackground(bg, nextUrl);
@@ -1821,7 +1820,10 @@ function highlightNewBackground(bg) {
  * @param {string} fitting Fitting type
  */
 function setFittingClass(fitting) {
-    applyWindowBackdrop({ fitting });
+    const backgrounds = $('#bg1');
+    for (const option of ['cover', 'contain', 'stretch', 'center']) {
+        backgrounds.toggleClass(option, option === fitting);
+    }
     background_settings.fitting = fitting;
 }
 

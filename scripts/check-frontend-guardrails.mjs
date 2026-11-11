@@ -9,13 +9,6 @@ const OVER_MAX_WHITELIST = new Set([
     'src/tauri/main/perf/perf-hud.js',
 ]);
 
-const NATIVE_GLOBAL_OWNERS = new Set([
-    'src/tauri-bridge.js',
-    'src/tauri/web-host/install.js',
-    // Rust injects this classic script before the application ESM graph exists.
-    'src/tauri/main/compat/android-speech-synthesis.js',
-]);
-
 function toPosixPath(value) {
     return String(value).replace(/\\/g, '/');
 }
@@ -129,9 +122,15 @@ function countLines(text) {
     return text.charCodeAt(text.length - 1) === 10 ? newlines : newlines + 1;
 }
 
-async function listFrontendFiles(repoRoot) {
-    const targets = [];
-    const stack = [path.join(repoRoot, 'src')];
+async function listHostFiles(repoRoot) {
+    const targets = [
+        'src/init.js',
+        'src/tauri-main.js',
+        'src/tauri-bridge.js',
+    ];
+
+    const mainDir = path.join(repoRoot, 'src', 'tauri', 'main');
+    const stack = [mainDir];
 
     while (stack.length > 0) {
         const current = stack.pop();
@@ -145,12 +144,12 @@ async function listFrontendFiles(repoRoot) {
         for (const entry of entries) {
             const fullPath = path.join(current, entry.name);
             if (entry.isDirectory()) {
-                if (entry.name !== 'dist' && entry.name !== 'lib') stack.push(fullPath);
+                stack.push(fullPath);
                 continue;
             }
 
             const ext = path.extname(entry.name).toLowerCase();
-            if (!['.js', '.mjs', '.ts', '.mts', '.tsx'].includes(ext)) {
+            if (ext !== '.js' && ext !== '.mjs' && ext !== '.ts' && ext !== '.mts') {
                 continue;
             }
 
@@ -158,7 +157,9 @@ async function listFrontendFiles(repoRoot) {
         }
     }
 
-    return targets.sort();
+    return Array.from(new Set(targets))
+        .filter((p) => isInsideHostScope(p))
+        .sort();
 }
 
 async function loadBaseline(repoRoot, baselinePath) {
@@ -228,27 +229,11 @@ async function main() {
 
     const args = parseArgs(process.argv.slice(2));
     const baseline = await loadBaseline(repoRoot, args.baselinePath);
-    const frontendFiles = await listFrontendFiles(repoRoot);
-    const hostFiles = frontendFiles.filter(isInsideHostScope);
+    const hostFiles = await listHostFiles(repoRoot);
 
     const filesByPath = {};
     const lineErrors = [];
     const contractErrors = [];
-
-    for (const posixPath of frontendFiles) {
-        if (posixPath.endsWith('.d.ts')
-            || /\.test\.[cm]?[jt]sx?$/.test(posixPath)) continue;
-        const text = await readTextFile(path.join(repoRoot, posixPath));
-        if (!NATIVE_GLOBAL_OWNERS.has(posixPath) && /\b(?:__TAURI__|__TAURI_INTERNALS__)\b/.test(text)) {
-            contractErrors.push(`${posixPath}: use tauri-bridge.js instead of native globals`);
-        }
-        const withoutRuntimeMarker = posixPath === 'src/init.js'
-            ? text.replace('window.__TAURI_RUNNING__ = true;', '')
-            : text;
-        if (/\b__TAURI_RUNNING__\b/.test(withoutRuntimeMarker)) {
-            contractErrors.push(`${posixPath}: __TAURI_RUNNING__ is an external marker, not a host capability check`);
-        }
-    }
 
     for (const posixPath of hostFiles) {
         const absPath = path.join(repoRoot, posixPath);

@@ -8,18 +8,18 @@
 use std::sync::Arc;
 
 use crate::presentation::web_resources::tauri_resource_adapter::handle_tauri_web_resource_request;
-#[cfg(desktop)]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 use tauri_plugin_opener::OpenerExt;
 use tt_application::services::host_resource_service::HostResourceService;
 
-#[cfg(desktop)]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 fn desktop_window_state_flags() -> tauri_plugin_window_state::StateFlags {
     use tauri_plugin_window_state::StateFlags;
 
     StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED
 }
 
-#[cfg(desktop)]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 pub(super) fn install_window_state_plugin(
     app_handle: &tauri::AppHandle,
     data_root: &std::path::Path,
@@ -62,7 +62,6 @@ pub(super) fn create_main_window(
         .expect("Main window config with label 'main' is missing");
 
     let builder = tauri::webview::WebviewWindowBuilder::from_config(app.handle(), window_config)?
-        .initialization_script(crate::platform::identity::initialization_script())
         // Route browser-visible URLs to host-owned file handlers so upstream JS
         // can keep using HTTP-like paths for extensions, thumbnails, and user
         // data assets.
@@ -70,7 +69,7 @@ pub(super) fn create_main_window(
             handle_tauri_web_resource_request(host_resource_service.as_ref(), &request, response);
         });
 
-    #[cfg(desktop)]
+    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
     let builder = {
         // Use the frontend's HTML5 drop handlers instead of Tauri's native
         // drag-drop events so each drop target keeps its existing behavior.
@@ -117,7 +116,7 @@ pub(super) fn create_main_window(
         })
     };
 
-    #[cfg(desktop)]
+    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
     // Desktop windows start hidden so restored size/position apply before first
     // paint. Mobile platforms do not use the window-state plugin.
     let builder = builder.visible(false);
@@ -125,15 +124,15 @@ pub(super) fn create_main_window(
     let window = builder.build()?;
 
     #[cfg(target_os = "ios")]
-    // iOS needs explicit WKWebView policy for safe-area/content inset behavior
-    // and JS dialogs.
+    // iOS needs explicit WKWebView policy for safe-area/content inset behavior,
+    // fullscreen media, and JS dialogs.
     crate::infrastructure::ios_webview::configure_main_wkwebview(&window)?;
 
     #[cfg(target_os = "macos")]
     // macOS shares the JS dialog delegate path but not the iOS inset policy.
     crate::infrastructure::macos_webview::configure_main_wkwebview(&window)?;
 
-    #[cfg(desktop)]
+    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
     {
         use tauri_plugin_window_state::WindowExt;
 

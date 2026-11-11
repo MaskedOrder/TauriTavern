@@ -9,8 +9,7 @@ import {
 } from '../script.js';
 import { extension_settings, saveMetadataDebounced } from './extensions.js';
 import { selected_group } from './group-chats.js';
-import { getCharaFilename, delay, toggleDrawer } from './utils.js';
-import { isInlineDrawerOpen } from './drawers.js';
+import { getCharaFilename, delay } from './utils.js';
 import { power_user } from './power-user.js';
 
 const extensionName = 'cfg';
@@ -131,8 +130,13 @@ function onCfgMenuItemClick() {
             $('#cfgConfig').removeClass('resizing');
         });
 
-        const drawer = document.getElementById('CFGBlockToggle').closest('.inline-drawer');
-        if (!isInlineDrawerOpen(drawer)) toggleDrawer(drawer, true);
+        //auto-open the main AN inline drawer
+        if ($('#CFGBlockToggle')
+            .siblings('.inline-drawer-content')
+            .css('display') !== 'block') {
+            $('#floatingPrompt').addClass('resizing');
+            $('#CFGBlockToggle').trigger('click');
+        }
     } else {
         //hide AN if it's already displayed
         $('#cfgConfig').addClass('resizing');

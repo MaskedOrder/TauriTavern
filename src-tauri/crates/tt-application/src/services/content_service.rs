@@ -1,11 +1,9 @@
-use std::path::Path;
-use std::sync::Arc;
-
 use serde::Serialize;
 use url::Url;
 
 use crate::errors::ApplicationError;
-use crate::services::external_import_service::{DownloadedFile, ExternalImportDownloader};
+use crate::services::external_import_service::ExternalImportDownloader;
+use std::sync::Arc;
 use tt_domain::errors::DomainError;
 use tt_ports::repositories::content_repository::ContentRepository;
 
@@ -55,19 +53,6 @@ impl ContentService {
         tracing::debug!("Default content initialized: {}", is_initialized);
 
         Ok(is_initialized)
-    }
-
-    /// Downloads an external URL into `destination`, which the caller owns.
-    pub async fn download_external_file(
-        &self,
-        url: &str,
-        destination: &Path,
-    ) -> Result<DownloadedFile, ApplicationError> {
-        let url = parse_external_import_url(url)?;
-        Ok(self
-            .external_import_downloader
-            .fetch_to_file(url, destination)
-            .await?)
     }
 
     pub async fn download_external_import_url(
@@ -238,11 +223,7 @@ mod tests {
             })
         }
 
-        async fn fetch_to_file(
-            &self,
-            _url: Url,
-            _path: &Path,
-        ) -> Result<DownloadedFile, DomainError> {
+        async fn fetch_to_file(&self, _url: Url, _path: &Path) -> Result<(), DomainError> {
             unimplemented!("not used by these tests")
         }
     }

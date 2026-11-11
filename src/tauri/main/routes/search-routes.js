@@ -6,7 +6,7 @@ function errorTextResponse(message, textResponse) {
     return textResponse(resolved.body, resolved.status, resolved.body);
 }
 
-export function registerSearchRoutes(router, context, { textResponse }) {
+export function registerSearchRoutes(router, context, { jsonResponse, textResponse }) {
     router.post('/api/search/searxng', async ({ body }) => {
         try {
             const html = await context.safeInvoke('search_searxng', {
@@ -20,4 +20,8 @@ export function registerSearchRoutes(router, context, { textResponse }) {
             return errorTextResponse(extractErrorText(error), textResponse);
         }
     });
+
+    router.all('/api/search/*', ({ path }) => jsonResponse({
+        error: `Unsupported endpoint: ${path}`,
+    }, 404));
 }

@@ -1,6 +1,5 @@
 const SURFACE_ATTR = 'data-tt-mobile-surface';
 
-/** @deprecated Native content viewports no longer require surface admission. */
 export const SURFACE = /** @type {const} */ ({
     Backdrop: 'backdrop',
     FullscreenWindow: 'fullscreen-window',
@@ -66,7 +65,6 @@ export async function waitForHostReady() {
     }
 }
 
-/** @deprecated Native content viewports no longer require surface admission. */
 export function applySurface(element, surface) {
     if (!(element instanceof Element)) {
         throw new Error('element must be an Element');
@@ -83,3 +81,4 @@ export function applySurface(element, surface) {
 export function subscribeLayout(handler) {
     return requireLayoutApi().subscribe(handler);
 }
+

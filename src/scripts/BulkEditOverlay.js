@@ -16,10 +16,9 @@ import {
 import { favsToHotswap } from './RossAscends-mods.js';
 import { loader } from './action-loader.js';
 import { convertCharacterToPersona } from './personas.js';
-import { callGenericPopup, POPUP_TYPE, Popup } from './popup.js';
+import { callGenericPopup, POPUP_TYPE } from './popup.js';
 import { createTagInput, getTagKeyForEntity, getTagsList, printTagList, tag_map, compareTagsForSort, removeTagFromMap, importTags, tag_import_setting } from './tags.js';
 import { t } from './i18n.js';
-import { initPopupMenu } from './popup-menu.js';
 
 /**
  * Static object representing the actions of the
@@ -120,6 +119,34 @@ class CharacterContextMenu {
     static #getCharacter = (characterId) => characters[characterId] ?? null;
 
     /**
+     * Show the context menu at the given position
+     *
+     * @param positionX
+     * @param positionY
+     */
+    static show = (positionX, positionY) => {
+        let contextMenu = document.getElementById(BulkEditOverlay.contextMenuId);
+        contextMenu.style.left = `${positionX}px`;
+        contextMenu.style.top = `${positionY}px`;
+
+        document.getElementById(BulkEditOverlay.contextMenuId).classList.remove('hidden');
+
+        // Adjust position if context menu is outside of viewport
+        const boundingRect = contextMenu.getBoundingClientRect();
+        if (boundingRect.right > window.innerWidth) {
+            contextMenu.style.left = `${positionX - (boundingRect.right - window.innerWidth)}px`;
+        }
+        if (boundingRect.bottom > window.innerHeight) {
+            contextMenu.style.top = `${positionY - (boundingRect.bottom - window.innerHeight)}px`;
+        }
+    };
+
+    /**
+     * Hide the context menu
+     */
+    static hide = () => document.getElementById(BulkEditOverlay.contextMenuId).classList.add('hidden');
+
+    /**
      * Sets up the context menu for the given overlay
      *
      * @param characterGroupOverlay
@@ -133,7 +160,7 @@ class CharacterContextMenu {
             { id: 'character_context_menu_tag', callback: characterGroupOverlay.handleContextMenuTag },
         ];
 
-        contextMenuItems.forEach(contextMenuItem => document.getElementById(contextMenuItem.id).addEventListener('click', () => characterGroupOverlay.runBulkAction(contextMenuItem.callback)));
+        contextMenuItems.forEach(contextMenuItem => document.getElementById(contextMenuItem.id).addEventListener('click', contextMenuItem.callback));
     }
 }
 
@@ -161,6 +188,49 @@ class BulkTagPopupHandler {
     constructor() { }
 
     /**
+     * Gets the HTML as a string that is going to be the popup for the bulk tag edit
+     *
+     * @returns String containing the html for the popup
+     */
+    #getHtml = () => {
+        const characterData = JSON.stringify({ characterIds: this.characterIds });
+        return `<div id="bulk_tag_shadow_popup">
+            <div id="bulk_tag_popup" class="wider_dialogue_popup">
+                <div id="bulk_tag_popup_holder">
+                    <h3 class="marginBot5">Modify tags of ${this.characterIds.length} characters</h3>
+                    <small class="bulk_tags_desc m-b-1">Add or remove the mutual tags of all selected characters. Import all or existing tags for all selected characters.</small>
+                    <div id="bulk_tags_avatars_block" class="avatars_inline avatars_inline_small tags tags_inline"></div>
+                    <br>
+                    <div id="bulk_tags_div" class="marginBot5" data-characters='${characterData}'>
+                        <div class="tag_controls">
+                            <input id="bulkTagInput" class="text_pole tag_input wide100p margin0" data-i18n="[placeholder]Search / Create Tags" placeholder="Search / Create tags" maxlength="25" />
+                            <div class="tags_view menu_button fa-solid fa-tags" title="View all tags" data-i18n="[title]View all tags"></div>
+                        </div>
+                        <div id="bulkTagList" class="m-t-1 tags"></div>
+                    </div>
+                    <div id="dialogue_popup_controls" class="m-t-1">
+                        <div id="bulk_tag_popup_reset" class="menu_button" title="Remove all tags from the selected characters" data-i18n="[title]Remove all tags from the selected characters">
+                            <i class="fa-solid fa-trash-can margin-right-10px"></i>
+                            All
+                        </div>
+                        <div id="bulk_tag_popup_remove_mutual" class="menu_button" title="Remove all mutual tags from the selected characters" data-i18n="[title]Remove all mutual tags from the selected characters">
+                            <i class="fa-solid fa-trash-can margin-right-10px"></i>
+                            Mutual
+                        </div>
+                        <div id="bulk_tag_popup_import_all_tags" class="menu_button" title="Import all tags from selected characters" data-i18n="[title]Import all tags from selected characters">
+                            Import All
+                        </div>
+                        <div id="bulk_tag_popup_import_existing_tags" class="menu_button" title="Import existing tags from selected characters" data-i18n="[title]Import existing tags from selected characters">
+                            Import Existing
+                        </div>
+                        <div id="bulk_tag_popup_cancel" class="menu_button" data-i18n="Cancel">Close</div>
+                    </div>
+                </div>
+            </div>
+        </div>`;
+    };
+
+    /**
      * Append and show the tag control
      *
      * @param {number[]} characterIds - The characters that are shown inside the popup
@@ -174,13 +244,7 @@ class BulkTagPopupHandler {
             return;
         }
 
-        const content = document.getElementById('bulk_tag_template').content.cloneNode(true).firstElementChild;
-        content.querySelector('h3').textContent = t`Modify tags of ${this.characterIds.length} characters`;
-        content.querySelector('#bulk_tags_div').dataset.characters = JSON.stringify({ characterIds: this.characterIds });
-        const popup = new Popup(content, POPUP_TYPE.TEXT, '', {
-            label: content.querySelector('h3'), wider: true, okButton: t`Close`,
-        });
-        popup.show();
+        document.body.insertAdjacentHTML('beforeend', this.#getHtml());
 
         const entities = this.characterIds.map(id => characterToEntity(characters[id], id)).filter(entity => entity.item !== undefined);
         buildAvatarList($('#bulk_tags_avatars_block'), entities);
@@ -193,6 +257,7 @@ class BulkTagPopupHandler {
 
         document.querySelector('#bulk_tag_popup_reset').addEventListener('click', this.resetTags.bind(this));
         document.querySelector('#bulk_tag_popup_remove_mutual').addEventListener('click', this.removeMutual.bind(this));
+        document.querySelector('#bulk_tag_popup_cancel').addEventListener('click', this.hide.bind(this));
         document.querySelector('#bulk_tag_popup_import_all_tags').addEventListener('click', this.importAllTags.bind(this));
         document.querySelector('#bulk_tag_popup_import_existing_tags').addEventListener('click', this.importExistingTags.bind(this));
     }
@@ -242,6 +307,18 @@ class BulkTagPopupHandler {
 
         this.currentMutualTags = mutualTags.sort(compareTagsForSort);
         return this.currentMutualTags;
+    }
+
+    /**
+     * Hide and remove the tag control
+     */
+    hide() {
+        let popupElement = document.querySelector('#bulk_tag_shadow_popup');
+        if (popupElement) {
+            document.body.removeChild(popupElement);
+        }
+
+        // No need to redraw here, all tags actions were redrawn when they happened
     }
 
     /**
@@ -306,6 +383,7 @@ class BulkEditOverlay {
     static bogusFolderClass = 'bogus_folder_select';
     static selectModeClass = 'group_overlay_mode_select';
     static selectedClass = 'character_selected';
+    static legacySelectedClass = 'bulk_select_checkbox';
     static bulkSelectedCountId = 'bulkSelectedCount';
 
     static longPressDelay = 2500;
@@ -327,10 +405,19 @@ class BulkEditOverlay {
      */
     lastSelected = { characterId: undefined, select: undefined };
 
-    #menu;
-    #menuPosition = null;
-    // Consume the release click of the long press that opened the menu.
-    #consumeClick = false;
+    /**
+     * Locks other pointer actions when the context menu is open
+     *
+     * @type {boolean}
+     */
+    #contextMenuOpen = false;
+
+    /**
+     * Whether the next character select should be skipped
+     *
+     * @type {boolean}
+     */
+    #cancelNextToggle = false;
 
     /**
      * @type HTMLElement
@@ -385,19 +472,6 @@ class BulkEditOverlay {
             return bulkEditOverlayInstance;
 
         this.container = document.getElementById(BulkEditOverlay.containerId);
-        const trigger = document.getElementById('bulkMoreButton');
-        const panel = document.getElementById(BulkEditOverlay.contextMenuId);
-        this.#menu = initPopupMenu(trigger, panel, {
-            onOpen: () => {
-                const anchor = trigger.getBoundingClientRect();
-                const [x, y] = this.#menuPosition ?? [anchor.left, anchor.bottom];
-                this.#menuPosition = null;
-                const bounds = panel.getBoundingClientRect();
-                panel.style.left = `${Math.max(0, Math.min(x, window.innerWidth - bounds.width))}px`;
-                panel.style.top = `${Math.max(0, Math.min(y, window.innerHeight - bounds.height))}px`;
-            },
-            closesOnClick: () => false,
-        });
 
         eventSource.on(event_types.CHARACTER_GROUP_OVERLAY_STATE_CHANGE_AFTER, this.handleStateChange);
         bulkEditOverlayInstance = Object.freeze(this);
@@ -429,6 +503,9 @@ class BulkEditOverlay {
         elements.forEach(element => element.addEventListener('dragend', this.handleLongPressEnd));
         elements.forEach(element => element.addEventListener('touchmove', this.handleLongPressEnd));
 
+        // Cohee: It only triggers when clicking on a margin between the elements?
+        // Feel free to fix or remove this, I'm not sure how to.
+        //this.container.addEventListener('click', this.handleCancelClick);
     };
 
     /**
@@ -440,13 +517,13 @@ class BulkEditOverlay {
         switch (this.state) {
             case BulkEditOverlayState.browse:
                 this.container.classList.remove(BulkEditOverlay.selectModeClass);
-                this.#consumeClick = false;
+                this.#contextMenuOpen = false;
                 this.#enableClickEventsForCharacters();
                 this.#enableClickEventsForGroups();
-                this.selectedCharacters.length = 0;
+                this.clearSelectedCharacters();
                 this.disableContextMenu();
                 this.#disableBulkEditButtonHighlight();
-                this.#menu.close();
+                CharacterContextMenu.hide();
                 break;
             case BulkEditOverlayState.select:
                 this.container.classList.add(BulkEditOverlay.selectModeClass);
@@ -457,14 +534,16 @@ class BulkEditOverlay {
                 break;
         }
 
-        for (const character of this.#getEnabledElements()) this.#applyCharacterSelection(character);
         this.stateChangeCallbacks.forEach(callback => callback(this.state));
     };
 
-    /** Route pointer and keyboard context-menu requests to the bulk menu. */
+    /**
+     * Block the browsers native context menu and
+     * set a click event to hide the custom context menu.
+     */
     enableContextMenu = () => {
         this.container.addEventListener('contextmenu', this.handleContextMenuShow);
-        this.container.addEventListener('keydown', this.handleContextMenuKeydown);
+        document.addEventListener('click', this.handleContextMenuHide);
     };
 
     /**
@@ -473,7 +552,7 @@ class BulkEditOverlay {
      */
     disableContextMenu = () => {
         this.container.removeEventListener('contextmenu', this.handleContextMenuShow);
-        this.container.removeEventListener('keydown', this.handleContextMenuKeydown);
+        document.removeEventListener('click', this.handleContextMenuHide);
     };
 
     handleDefaultContextMenu = (event) => {
@@ -491,8 +570,12 @@ class BulkEditOverlay {
      */
     handleHold = (event) => {
         if (0 !== event.button && event.type !== 'touchstart') return;
-        this.#consumeClick = false;
-        if (this.#menu.isOpen()) return;
+        if (this.#contextMenuOpen) {
+            this.#contextMenuOpen = false;
+            this.#cancelNextToggle = true;
+            CharacterContextMenu.hide();
+            return;
+        }
 
         let cancel = false;
 
@@ -507,9 +590,9 @@ class BulkEditOverlay {
                 if (this.state === BulkEditOverlayState.browse) {
                     this.selectState();
                 } else if (this.state === BulkEditOverlayState.select) {
-                    this.#consumeClick = true;
-                    this.#menuPosition = this.#getContextMenuPosition(event);
-                    this.#menu.open();
+                    this.#contextMenuOpen = true;
+                    const [x, y] = this.#getContextMenuPosition(event);
+                    CharacterContextMenu.show(x, y);
                 }
             }
 
@@ -520,7 +603,12 @@ class BulkEditOverlay {
 
     handleLongPressEnd = (event) => {
         this.isLongPress = false;
-        if (this.#menu.isOpen()) event.stopPropagation();
+        if (this.#contextMenuOpen) event.stopPropagation();
+    };
+
+    handleCancelClick = () => {
+        if (false === this.#contextMenuOpen) this.state = BulkEditOverlayState.browse;
+        this.#contextMenuOpen = false;
     };
 
     /**
@@ -530,12 +618,14 @@ class BulkEditOverlay {
      * @returns {(boolean|number|*)[]}
      */
     #getContextMenuPosition = (event) => [
-        event.touches?.[0]?.clientX ?? event.clientX,
-        event.touches?.[0]?.clientY ?? event.clientY,
+        event.clientX || event.touches[0].clientX,
+        event.clientY || event.touches[0].clientY,
     ];
 
     #stopEventPropagation = (event) => {
-        if (this.#menu.isOpen()) this.#menu.close();
+        if (this.#contextMenuOpen) {
+            this.handleContextMenuHide(event);
+        }
         event.stopPropagation();
     };
 
@@ -545,21 +635,11 @@ class BulkEditOverlay {
 
     #enableClickEventsForCharacters = () => this.#getEnabledElements().forEach(element => element.removeEventListener('click', this.toggleCharacterSelected));
 
-    #disableClickEventsForCharacters = () => this.#getEnabledElements().forEach(element => {
-        element.addEventListener('click', this.toggleCharacterSelected);
-    });
+    #disableClickEventsForCharacters = () => this.#getEnabledElements().forEach(element => element.addEventListener('click', this.toggleCharacterSelected));
 
-    #applyCharacterSelection = (character) => {
-        const selected = this.selectedCharacters.includes(Number(character.dataset.chid));
-        character.classList.toggle(BulkEditOverlay.selectedClass, selected);
-        const primary = character.querySelector(':scope > .sr-only');
-        if (this.state === BulkEditOverlayState.select) primary.setAttribute('aria-pressed', String(selected));
-        else primary.removeAttribute('aria-pressed');
-    };
+    #enableBulkEditButtonHighlight = () => document.getElementById('bulkEditButton').classList.add('bulk_edit_overlay_active');
 
-    #enableBulkEditButtonHighlight = () => $('#bulkEditButton').addClass('bulk_edit_overlay_active').attr('aria-pressed', 'true');
-
-    #disableBulkEditButtonHighlight = () => $('#bulkEditButton').removeClass('bulk_edit_overlay_active').attr('aria-pressed', 'false');
+    #disableBulkEditButtonHighlight = () => document.getElementById('bulkEditButton').classList.remove('bulk_edit_overlay_active');
 
     #getEnabledElements = () => [...this.container.getElementsByClassName(BulkEditOverlay.characterClass)];
 
@@ -570,20 +650,18 @@ class BulkEditOverlay {
 
         const character = event.currentTarget;
 
-        if (this.#consumeClick) {
-            this.#consumeClick = false;
-            return;
+        if (!this.#contextMenuOpen && !this.#cancelNextToggle) {
+            if (event.shiftKey) {
+                // Shift click might have selected text that we don't want to. Unselect it.
+                document.getSelection().removeAllRanges();
+
+                this.handleShiftClick(character);
+            } else {
+                this.toggleSingleCharacter(character);
+            }
         }
-        if (this.#menu.isOpen()) {
-            this.#menu.close();
-            return;
-        }
-        if (event.shiftKey) {
-            document.getSelection().removeAllRanges();
-            this.handleShiftClick(character);
-        } else {
-            this.toggleSingleCharacter(character);
-        }
+
+        this.#cancelNextToggle = false;
     };
 
     /**
@@ -618,12 +696,18 @@ class BulkEditOverlay {
         const characterId = Number(character.getAttribute('data-chid'));
 
         const select = !this.selectedCharacters.includes(characterId);
+        const legacyBulkEditCheckbox = /** @type {HTMLInputElement} */ (character.querySelector('.' + BulkEditOverlay.legacySelectedClass));
+
         if (select) {
+            character.classList.add(BulkEditOverlay.selectedClass);
+            if (legacyBulkEditCheckbox) legacyBulkEditCheckbox.checked = true;
             this.#selectedCharacters.push(characterId);
         } else {
+            character.classList.remove(BulkEditOverlay.selectedClass);
+            if (legacyBulkEditCheckbox) legacyBulkEditCheckbox.checked = false;
             this.#selectedCharacters = this.#selectedCharacters.filter(item => characterId !== item);
         }
-        this.#applyCharacterSelection(character);
+
         this.updateSelectedCount();
 
         if (markState) {
@@ -639,9 +723,7 @@ class BulkEditOverlay {
      */
     updateSelectedCount = (countOverride = undefined) => {
         const count = countOverride ?? this.selectedCharacters.length;
-        const status = document.getElementById(BulkEditOverlay.bulkSelectedCountId);
-        status.querySelector('[aria-hidden]').textContent = String(count);
-        status.querySelector('.sr-only').textContent = t`${count} characters selected`;
+        $(`#${BulkEditOverlay.bulkSelectedCountId}`).text(count).attr('title', `${count} characters selected`);
     };
 
     /**
@@ -671,26 +753,18 @@ class BulkEditOverlay {
         }
     };
 
-    handleContextMenuKeydown = (event) => {
-        if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
-            this.handleContextMenuShow(event);
-        }
-    };
-
     handleContextMenuShow = (event) => {
         event.preventDefault();
-        this.#menuPosition = event.clientX || event.clientY ? this.#getContextMenuPosition(event) : null;
-        this.#menu.open();
+        const [x, y] = this.#getContextMenuPosition(event);
+        CharacterContextMenu.show(x, y);
+        this.#contextMenuOpen = true;
     };
 
-    runBulkAction = async (action) => {
-        document.getElementById('bulkEditButton').focus();
-        this.#menu.close();
-        try {
-            await action();
-        } catch (error) {
-            console.error('Bulk character action failed', error);
-            toastr.error(error.message, t`Bulk edit characters`);
+    handleContextMenuHide = (event) => {
+        let contextMenu = document.getElementById(BulkEditOverlay.contextMenuId);
+        if (false === contextMenu.contains(event.target)) {
+            CharacterContextMenu.hide();
+            this.#contextMenuOpen = false;
         }
     };
 
@@ -767,7 +841,7 @@ class BulkEditOverlay {
         const characterIds = this.selectedCharacters;
         const popupContent = $(BulkEditOverlay.#getDeletePopupContentHtml(characterIds));
         const checkbox = popupContent.find('#del_char_checkbox');
-        const promise = callGenericPopup(popupContent, POPUP_TYPE.CONFIRM, '', { label: popupContent.filter('h3')[0] })
+        const promise = callGenericPopup(popupContent, POPUP_TYPE.CONFIRM)
             .then((accept) => {
                 if (!accept) return;
 
@@ -801,6 +875,16 @@ class BulkEditOverlay {
     };
 
     addStateChangeCallback = callback => this.stateChangeCallbacks.push(callback);
+
+    /**
+     * Clears internal character storage and
+     * removes visual highlight.
+     */
+    clearSelectedCharacters = () => {
+        document.querySelectorAll('#' + BulkEditOverlay.containerId + ' .' + BulkEditOverlay.selectedClass)
+            .forEach(element => element.classList.remove(BulkEditOverlay.selectedClass));
+        this.selectedCharacters.length = 0;
+    };
 }
 
 export { BulkEditOverlayState, CharacterContextMenu, BulkEditOverlay };

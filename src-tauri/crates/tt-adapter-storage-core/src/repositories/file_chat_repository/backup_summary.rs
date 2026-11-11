@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -13,9 +12,9 @@ use crate::file_system::write_json_file;
 
 use super::FileChatRepository;
 use super::backup_inventory::{BackupEntry, BackupInventory};
-use super::summary::{ChatSummary, FileSignature};
+use super::summary::FileSignature;
 
-const INDEX_SCHEMA_VERSION: u32 = 2;
+const INDEX_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct BackupSummarySignature {
@@ -53,13 +52,13 @@ struct BackupSummaryCacheEntry {
     signature: BackupSummarySignature,
     jsonl_record_count: usize,
     #[serde(skip)]
-    summary: Option<ChatSummary>,
+    full_summary: Option<ChatSearchResult>,
 }
 
 #[derive(Serialize, Deserialize)]
-struct BackupSummaryIndexSnapshot<'a> {
+struct BackupSummaryIndexSnapshot {
     schema_version: u32,
-    entries: Cow<'a, HashMap<String, BackupSummaryCacheEntry>>,
+    entries: HashMap<String, BackupSummaryCacheEntry>,
 }
 
 pub(super) struct BackupSummaryCache {
@@ -117,7 +116,7 @@ impl BackupSummaryCache {
             return;
         }
 
-        self.entries = snapshot.entries.into_owned();
+        self.entries = snapshot.entries;
     }
 
     fn matching_entry(&self, entry: &BackupEntry) -> Option<&BackupSummaryCacheEntry> {
@@ -131,9 +130,9 @@ impl BackupSummaryCache {
             .map(|cached| cached.jsonl_record_count.saturating_sub(1))
     }
 
-    fn summary(&self, entry: &BackupEntry) -> Option<ChatSummary> {
+    fn summary(&self, entry: &BackupEntry) -> Option<ChatSearchResult> {
         self.matching_entry(entry)
-            .and_then(|cached| cached.summary.clone())
+            .and_then(|cached| cached.full_summary.clone())
     }
 
     fn record_count(&mut self, entry: &BackupEntry, jsonl_record_count: usize) {
@@ -142,13 +141,13 @@ impl BackupSummaryCache {
             BackupSummaryCacheEntry {
                 signature: BackupSummarySignature::from_entry(entry),
                 jsonl_record_count,
-                summary: None,
+                full_summary: None,
             },
         );
         self.dirty = true;
     }
 
-    fn record_summary(&mut self, entry: &BackupEntry, summary: ChatSummary) {
+    fn record_summary(&mut self, entry: &BackupEntry, summary: ChatSearchResult) {
         let signature = BackupSummarySignature::from_entry(entry);
         let (jsonl_record_count, persistent_changed) =
             match self.entries.get(&entry.logical_file_name) {
@@ -160,7 +159,7 @@ impl BackupSummaryCache {
             BackupSummaryCacheEntry {
                 signature,
                 jsonl_record_count,
-                summary: Some(summary),
+                full_summary: Some(summary),
             },
         );
         self.dirty |= persistent_changed;
@@ -172,7 +171,7 @@ impl BackupSummaryCache {
         };
 
         cached.signature = BackupSummarySignature::from_entry(entry);
-        if let Some(summary) = cached.summary.as_mut() {
+        if let Some(summary) = cached.full_summary.as_mut() {
             summary.file_name = entry.logical_file_name.clone();
             summary.file_size = entry.byte_len;
         }
@@ -203,10 +202,10 @@ impl BackupSummaryCache {
         self.dirty |= self.entries.len() != before;
     }
 
-    fn snapshot(&self) -> BackupSummaryIndexSnapshot<'_> {
+    fn snapshot(&self) -> BackupSummaryIndexSnapshot {
         BackupSummaryIndexSnapshot {
             schema_version: INDEX_SCHEMA_VERSION,
-            entries: Cow::Borrowed(&self.entries),
+            entries: self.entries.clone(),
         }
     }
 }
@@ -238,12 +237,12 @@ impl FileChatRepository {
             let mut cache = self.backup_summary_cache.lock().await;
             cache.ensure_loaded();
             if let Some(summary) = cache.summary(entry) {
-                return Ok(summary.into());
+                return Ok(summary);
             }
         }
 
         let signature = BackupSummarySignature::from_entry(entry);
-        let (scanned, _) = self
+        let scanned = self
             .scan_chat_summary_file(
                 &self.backups_dir.join(&entry.file_name),
                 "",
@@ -260,7 +259,7 @@ impl FileChatRepository {
         let mut cache = self.backup_summary_cache.lock().await;
         cache.ensure_loaded();
         cache.record_summary(entry, summary.clone());
-        Ok(summary.into())
+        Ok(summary)
     }
 
     pub(super) async fn record_backup_jsonl_count(
@@ -313,5 +312,64 @@ impl FileChatRepository {
         write_json_file(&index_path, &cache.snapshot()).await?;
         cache.dirty = false;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    use super::super::backup_codec::BackupFormat;
+    use super::*;
+
+    fn entry(name: &str) -> BackupEntry {
+        BackupEntry {
+            logical_file_name: name.to_string(),
+            file_name: format!("{name}.zst"),
+            format: BackupFormat::Zstd,
+            parsed_prefix: None,
+            modified: UNIX_EPOCH + Duration::from_secs(1),
+            byte_len: 42,
+            content_signature: None,
+        }
+    }
+
+    #[test]
+    fn backup_count_is_used_only_for_the_matching_physical_file() {
+        let mut cache = BackupSummaryCache::new(PathBuf::from("unused"));
+        cache.loaded = true;
+        let original = entry("chat_alice_20260101-000000.jsonl");
+        cache.record_count(&original, 4);
+        assert_eq!(cache.message_count(&original), Some(3));
+
+        let mut replaced = original.clone();
+        replaced.byte_len += 1;
+        assert_eq!(cache.message_count(&replaced), None);
+    }
+
+    #[test]
+    fn in_memory_full_summary_does_not_dirty_unchanged_index_data() {
+        let mut cache = BackupSummaryCache::new(PathBuf::from("unused"));
+        cache.loaded = true;
+        let entry = entry("chat_alice_20260101-000000.jsonl");
+        cache.record_count(&entry, 4);
+        cache.dirty = false;
+
+        cache.record_summary(
+            &entry,
+            ChatSearchResult {
+                character_name: String::new(),
+                file_name: entry.logical_file_name.clone(),
+                file_size: entry.byte_len,
+                message_count: 3,
+                preview: "tail".to_string(),
+                date: 1,
+                chat_id: None,
+                chat_metadata: None,
+            },
+        );
+
+        assert!(!cache.dirty);
+        assert_eq!(cache.summary(&entry).unwrap().preview, "tail");
     }
 }

@@ -82,6 +82,7 @@ export function SubAgentTimelineDialog(props: {
         <dialog
             ref={dialogRef}
             className="ttas-dialog ttas-subagent-dialog"
+            data-tt-mobile-surface="fullscreen-window"
             onCancel={(event) => {
                 event.preventDefault();
                 close();

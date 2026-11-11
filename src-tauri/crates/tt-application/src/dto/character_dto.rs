@@ -129,47 +129,39 @@ pub struct UpdateCharacterCardDataDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AdoptCharacterLorebookDto {
+pub struct CheckCharacterLorebookConflictDto {
     pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum CharacterLorebookAdoptionDto {
-    None,
-    Linked {
-        world: String,
-        previous: String,
-        created: bool,
-        updated: bool,
-    },
-    Decision {
-        world: String,
-        target: String,
-        can_update: bool,
-        token: String,
-    },
-    Failed,
+pub struct CharacterLorebookConflictDto {
+    pub conflict: bool,
+    pub world: String,
+    pub embedded_name: Option<String>,
+    pub current_available: bool,
+    pub conflict_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum CharacterLorebookAdoptionChoice {
-    Adopt,
-    Update,
+pub enum CharacterLorebookConflictResolution {
+    Current,
+    Embedded,
+    Copy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResolveCharacterLorebookAdoptionDto {
+pub struct ResolveCharacterLorebookConflictDto {
     pub name: String,
-    pub choice: CharacterLorebookAdoptionChoice,
-    pub token: String,
+    pub resolution: CharacterLorebookConflictResolution,
+    pub conflict_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImportCharacterResultDto {
-    pub character: CharacterDto,
-    pub lorebook: CharacterLorebookAdoptionDto,
+pub struct ResolveCharacterLorebookConflictResultDto {
+    pub world: String,
+    pub affected_world: Option<String>,
+    pub world_written: bool,
 }
 
 /// Raw character card merge DTO used by upstream-compatible HTTP routes.
@@ -228,6 +220,13 @@ pub struct ReplaceCharacterDto {
     pub name: String,
 }
 
+/// Character export DTO
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportCharacterDto {
+    pub name: String,
+    pub target_path: String,
+}
+
 /// Character export content DTO
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportCharacterContentDto {
@@ -239,6 +238,7 @@ pub struct ExportCharacterContentDto {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportCharacterContentResultDto {
     pub data: Vec<u8>,
+    pub mime_type: String,
 }
 
 /// Character avatar update DTO

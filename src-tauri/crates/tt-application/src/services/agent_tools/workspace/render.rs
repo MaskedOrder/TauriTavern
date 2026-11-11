@@ -1,5 +1,20 @@
 use super::MAX_LIST_ENTRIES;
-use tt_ports::workspace_fs::{WorkspaceEntryKind, WorkspaceFileList};
+use super::policy::WorkspaceAccessPolicy;
+use tt_ports::repositories::workspace_repository::{WorkspaceEntryKind, WorkspaceFileList};
+
+pub(super) fn filter_visible_entries(
+    list: WorkspaceFileList,
+    policy: &WorkspaceAccessPolicy,
+) -> WorkspaceFileList {
+    WorkspaceFileList {
+        truncated: list.truncated,
+        entries: list
+            .entries
+            .into_iter()
+            .filter(|entry| policy.is_visible(&entry.path))
+            .collect(),
+    }
+}
 
 pub(super) fn render_file_list(list: &WorkspaceFileList) -> String {
     if list.entries.is_empty() {
