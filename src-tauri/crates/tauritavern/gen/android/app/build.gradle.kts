@@ -37,10 +37,24 @@ android {
                     keystoreProperties.load(it)
                 }
 
-            keyAlias = keystoreProperties["keyAlias"] as String
+                val alias = keystoreProperties.getProperty("keyAlias")
+                val password = keystoreProperties.getProperty("password")
+                val storePath = keystoreProperties.getProperty("storeFile")
 
+                if (alias != null && password != null && storePath != null) {
+                    keyAlias = alias
+                    keyPassword = password
+                    storeFile = file(storePath)
+                    storePassword = password
+                    // Some OEM installers read the v1 (JAR) certificate even though Android 7+ ignores it.
+                    enableV1Signing = true
+                    enableV2Signing = true
+                    enableV3Signing = true
+                }
+            }
         }
     }
+
     buildTypes {
         getByName("debug") {
             manifestPlaceholders["usesCleartextTraffic"] = "true"
