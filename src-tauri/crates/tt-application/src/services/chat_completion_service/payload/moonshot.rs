@@ -5,6 +5,8 @@ use crate::errors::ApplicationError;
 use super::super::model_capabilities::{VersionedModel, map_low_high_max_reasoning_effort};
 use super::openai;
 
+use crate::services::chat_completion_service::payload::shared::add_assistant_prefix;
+
 const KIMI_FIXED_SAMPLING_FIELDS: &[&str] = &[
     "temperature",
     "top_p",
