@@ -4,7 +4,6 @@ use crate::errors::ApplicationError;
 
 use super::super::model_capabilities::{VersionedModel, map_low_high_max_reasoning_effort};
 use super::openai;
-use super::shared::add_assistant_prefix;
 
 const KIMI_FIXED_SAMPLING_FIELDS: &[&str] = &[
     "temperature",
@@ -76,6 +75,14 @@ mod tests {
 
     use super::build;
 
+    fn build_payload(payload: Value) -> Value {
+        let payload = payload
+            .as_object()
+            .cloned()
+            .expect("payload must be an object");
+        build(payload).expect("build should succeed").1
+    }
+
     #[test]
     fn moonshot_sends_only_the_parameters_each_kimi_model_accepts() {
         for (model, include_reasoning, keeps_sampling, thinking, effort) in [
@@ -127,27 +134,88 @@ mod tests {
 
     #[test]
     fn moonshot_marks_assistant_prefill_as_partial() {
-        let payload = json!({
+        let upstream = build_payload(json!({
             "model": "kimi-k3",
             "messages": [
                 {"role": "user", "content": "hello"},
                 {"role": "assistant", "content": "prefill"}
-            ],
-            "chat_completion_source": "moonshot"
-        })
-        .as_object()
-        .cloned()
-        .expect("payload must be object");
+            ]
+        }));
 
-        let (_, upstream) = build(payload).expect("build should succeed");
-        let partial = upstream
-            .get("messages")
-            .and_then(Value::as_array)
-            .and_then(|messages| messages.last())
-            .and_then(Value::as_object)
-            .and_then(|message| message.get("partial"))
-            .and_then(Value::as_bool);
+        assert_eq!(upstream["messages"][1]["partial"], json!(true));
+    }
 
-        assert_eq!(partial, Some(true));
+    #[test]
+    fn moonshot_moves_closed_think_prefill_into_reasoning_content() {
+        let upstream = build_payload(json!({
+            "model": "kimi-k3",
+            "messages": [
+                {"role": "assistant", "content": "  <think>reasoning here</think> answer"}
+            ]
+        }));
+
+        assert_eq!(
+            upstream["messages"][0]["reasoning_content"],
+            json!("reasoning here")
+        );
+        assert_eq!(upstream["messages"][0]["content"], json!("answer"));
+        assert_eq!(upstream["messages"][0]["partial"], json!(true));
+    }
+
+    #[test]
+    fn moonshot_moves_unclosed_think_prefill_into_reasoning_content() {
+        let upstream = build_payload(json!({
+            "model": "kimi-k3",
+            "messages": [
+                {"role": "assistant", "content": "<think>unfinished reasoning"}
+            ]
+        }));
+
+        assert_eq!(
+            upstream["messages"][0]["reasoning_content"],
+            json!("unfinished reasoning")
+        );
+        assert_eq!(upstream["messages"][0]["content"], json!(""));
+        assert_eq!(upstream["messages"][0]["partial"], json!(true));
+    }
+
+    #[test]
+    fn moonshot_does_not_mark_assistant_prefill_partial_with_json_schema() {
+        let upstream = build_payload(json!({
+            "model": "kimi-k3",
+            "json_schema": {"value": {"type": "object"}},
+            "messages": [
+                {"role": "assistant", "content": "prefill"}
+            ]
+        }));
+
+        assert_eq!(upstream["messages"][0]["partial"], Value::Null);
+    }
+
+    #[test]
+    fn moonshot_does_not_mark_assistant_prefill_partial_when_tools_are_present() {
+        let upstream = build_payload(json!({
+            "model": "kimi-k3",
+            "tools": [{"type": "function", "function": {"name": "example"}}],
+            "messages": [
+                {"role": "assistant", "content": "prefill"}
+            ]
+        }));
+
+        assert_eq!(upstream["messages"][0]["partial"], Value::Null);
+    }
+
+    #[test]
+    fn moonshot_does_not_mark_assistant_prefill_partial_when_tool_message_exists() {
+        let upstream = build_payload(json!({
+            "model": "kimi-k3",
+            "messages": [
+                {"role": "assistant", "content": "earlier"},
+                {"role": "tool", "content": "tool result"},
+                {"role": "assistant", "content": "prefill"}
+            ]
+        }));
+
+        assert_eq!(upstream["messages"][2]["partial"], Value::Null);
     }
 }
