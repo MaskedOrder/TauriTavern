@@ -41,8 +41,51 @@ pub(super) fn build(mut payload: Map<String, Value>) -> Result<(String, Value), 
     } else {
         reasoning_effort
     };
-    if let Some(messages) = payload.get_mut("messages").and_then(Value::as_array_mut) {
-        add_assistant_prefix(messages, "partial");
+    let has_json_schema = payload.contains_key("json_schema");
+    let has_tools = payload
+        .get("tools")
+        .and_then(Value::as_array)
+        .is_some_and(|tools| !tools.is_empty());
+
+    if !has_json_schema && !has_tools {
+        if let Some(messages) = payload.get_mut("messages").and_then(Value::as_array_mut) {
+            let has_tool_message = messages
+                .iter()
+                .any(|message| message.get("role").and_then(Value::as_str) == Some("tool"));
+
+            if !has_tool_message {
+                if let Some(last_message) = messages.last_mut().and_then(Value::as_object_mut) {
+                    if last_message.get("role").and_then(Value::as_str) == Some("assistant") {
+                        if let Some(content) = last_message
+                            .get("content")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                        {
+                            let trimmed = content.trim_start();
+
+                            if let Some(after_open) = trimmed.strip_prefix("<think>") {
+                                let (reasoning, remainder) = match after_open.split_once("</think>")
+                                {
+                                    Some((reasoning, remainder)) => {
+                                        (reasoning, remainder.trim_start().to_string())
+                                    }
+                                    None => (after_open, String::new()),
+                                };
+
+                                last_message.insert(
+                                    "reasoning_content".to_string(),
+                                    Value::String(reasoning.trim().to_string()),
+                                );
+                                last_message
+                                    .insert("content".to_string(), Value::String(remainder));
+                            }
+                        }
+                    }
+                }
+
+                add_assistant_prefix(messages, "partial");
+            }
+        }
     }
 
     let (endpoint, mut upstream_payload) = openai::build(payload)?;
