@@ -60,7 +60,9 @@
 
 `SillyTavern.getContext().macros` 提供宏注册与独立求值，接口和使用范围见[宏求值 API](API/Macros.md)。
 
-`SillyTavern.getContext().messageFormatter` 暴露上游 [MessageFormatter](../src/scripts/message-formatter.js) 单例。同步 hook 在 HTML 净化前运行，可重复执行；单个 hook 失败会报告并隔离。延后扩展初始化完成后，通过 ChatSurface 统一补刷已挂载内容。
+`SillyTavern.getContext().messageFormatter` 暴露上游 [MessageFormatter](../src/scripts/message-formatter.js) 单例。同步 hook 在 HTML 净化前运行，可重复执行，每次都收到整条消息；单个 hook 失败会报告并隔离。延后扩展初始化完成后，通过 ChatSurface 统一补刷已挂载内容。
+
+流式中间帧的 `.mes_text` 等于当时文本的格式化结果（重复标题的 id 编号可能不同），未变的顶层块保留原节点；其他代码改动过 `.mes_text` 时，下一帧整体重写。
 
 > 这些符号被第三方脚本/扩展/角色卡直接调用，变更需极度谨慎。
 
@@ -92,7 +94,7 @@
 由 `src/tauri/main/share-target-bridge.js` 安装：
 
 - `window.__TAURITAVERN_NATIVE_SHARE__ = { push(payload), subscribe(handler) }`
-  - `push()`：注入分享 payload（url 或 png）。
+  - `push()`：注入分享 payload，`{ kind: 'url', url }` 或 `{ kind: 'png', uri, name }`（content URI 与显示名）。
   - `subscribe()`：订阅消费；若早到则进入 backlog，首次订阅会 drain backlog。
 
 ### 3.5 上游库兼容全局（Public）
@@ -121,10 +123,10 @@ ESM `/scripts/secrets.js` 的 `writeSecret`、`deleteSecret`、`readSecretState`
   - `api.layout`：读取与订阅已排除原生遮挡的内容视口；`capture()` 属于第一方使用的 Project Contract，见 [API/Layout.md](API/Layout.md)。
   - `api.chat`：TauriTavern 独有的聊天/记忆类扩展 API（聊天摘要、元数据、历史分页、稳定存储、后端定位、纯文本检索）。
     - 详细签名与示例见：`docs/API/Chat.md`。
-  - `api.characterCards`：选择角色卡文件，以及接管卡内的世界书。
-    - `isNativePickerAvailable()`：所有宿主都为 `true`。
-    - `pickFiles(options?: { multiple?: boolean }) -> Promise<File[] | null>`：选择 `json/png` 角色卡，返回标准 `File[]`；支持多选；取消返回 `null`，失败抛错。
-    - Project，第一方使用，参数为头像文件名：
+  - `api.characterCards`（Project，第一方使用）：把角色卡放进宿主暂存，以及接管卡内的世界书。
+    - `pickFiles({ multiple? })`、`stageFromUrl(url)`、`stageSharedFile(uri, name)`（仅 Android）得到 `StagedFile { path, name }`，交给 `processDroppedFiles` 导入，规则见[文件导入与导出](CurrentState/FileTransfer.md)。`pickFiles` 取消时返回 `null`；`stageFromUrl` 只接受角色卡。
+    - `contentFromUrl(url)` 接受 URL 或站点 ID，返回 `{ kind, file }`：`character` 为 `StagedFile`，`lorebook` 为 `File`。
+    - 世界书接管，参数为头像文件名：
       - `adoptLorebook(avatar)`：按角色当前的绑定，接管卡内世界书。
       - `resolveLorebookAdoption(avatar, choice, token)`：提交 `adopt` 或 `update`。决定已过期时，以 `LorebookAdoptionConflictError` 拒绝。
       - 两个方法都返回 `TauriTavernCharacterLorebookAdoption`（`src/types.d.ts`），失败时拒绝。规则见[角色世界书](CurrentState/CharacterIdentityContract.md#10-角色世界书)。
@@ -242,7 +244,9 @@ ESM `/scripts/secrets.js` 的 `writeSecret`、`deleteSecret`、`readSecretState`
 
 路由位于 `src/tauri/main/routes/*`；公共契约覆盖上游兼容及生态实际依赖的接口。
 
-`/api/characters/import` 的响应比上游多一个 `lorebook` 字段，形状与 `api.characterCards` 相同。角色已经写入、但世界书接管失败时，`lorebook.status` 为 `failed`，错误由后端提示。
+`/api/characters/import` 的响应比上游多一个 `lorebook` 字段，形状与 `api.characterCards` 相同。角色已经写入、但世界书接管失败时，`lorebook.status` 为 `failed`，错误由后端提示。请求可以用 `staged_path`（宿主暂存文件的路径）代替 `avatar`。
+
+`/api/content/importURL`、`/api/content/importUUID` 与 `/api/assets/download` 的 `character` 类别由宿主下载，响应与上游相同；名单外的来源先询问用户（[导入来源](CurrentState/UserEndpointAccess.md#导入来源)）。两条 content 路由都接受 URL 或站点 ID。
 
 `/api/characters/delete` 只删除角色和请求删除的聊天，不删除世界书。界面删卡时如何清理世界书，见[角色世界书](CurrentState/CharacterIdentityContract.md#10-角色世界书)。
 
@@ -255,6 +259,8 @@ ESM `/scripts/secrets.js` 的 `writeSecret`、`deleteSecret`、`readSecretState`
 启用[历史滑动按需加载](CurrentState/ChatPayload.md#21-历史滑动按需加载)时，`getContext().chat` 的历史候选槽位允许为 null；兼容 get、导出与保存文件保持完整。
 
 世界书 get/edit 直接读写磁盘，保留未知字段和键顺序，不合并编辑缓存；get 缺失文件返回空 `entries`。`WORLDINFO_UPDATED` 仅在保存成功后发送；读取或保存失败阻止依赖该世界书的生成。
+
+`/api/worldinfo/list` 只列出扩展名为小写 `.json` 的文件，与 get/edit 寻址的范围相同；上游不区分扩展名大小写。
 
 最关键的启动依赖：
 
@@ -347,6 +353,7 @@ header 名也可从 `window.__TAURITAVERN__?.traceHeader` 获取（用于避免�
 | `--tt-inset-*` | `env(safe-area-inset-*, 0px)` 的别名 |
 | `--tt-viewport-bottom-inset` | `--tt-inset-bottom` 的别名 |
 | `--tt-window-x/-y/-width/-height` | Project：只写在 `#bg1` 上，供第一方窗口背景使用 |
+| `data-tt-drawer-bar` | Project：宿主在系统 bar 区域绘制抽屉按钮时写在根元素上（`left`/`right`/`top`），页面没有顶栏 |
 | `data-tt-mobile-surface`；`layout-kit.js` 的 `SURFACE`/`applySurface()` | 保留，无布局作用 |
 | `--tt-ime-bottom`、`--tt-base-viewport-height`、`__TAURITAVERN_INSETS__`、`__TAURITAVERN_MOBILE_OVERLAY_COMPAT__`、`__TAURITAVERN_MOBILE_IFRAME_VIEWPORT_CONTRACT_BRIDGE__`、`__TAURITAVERN_ANDROID_IME_LAYOUT_HOST__` | 已移除 |
 

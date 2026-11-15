@@ -5,12 +5,14 @@
 //! in `app::composition`; frontend-visible behavior is still owned by presentation
 //! commands and web resource adapters.
 
+mod environment;
 mod observability;
 mod plugins;
 mod resources;
 mod runtime_paths;
 mod setup;
 mod shutdown;
+mod thread_pool;
 mod window;
 
 use std::sync::Arc;
@@ -21,10 +23,15 @@ use tt_adapter_storage_core::commit_stage::PageGeneration;
 use crate::infrastructure::agent_extension_tools::AgentExtensionTools;
 use crate::presentation::commands::registry::invoke_handler;
 
+pub(crate) use environment::host_environment;
+pub(crate) use setup::apply_startup_profile;
+pub(crate) use shutdown::exit_for_safe_mode;
 #[cfg(target_os = "windows")]
 pub(crate) use shutdown::request_frontend_shutdown;
 
 pub(crate) fn run() {
+    thread_pool::configure();
+
     // Builder order is part of the host contract: install native capabilities,
     // run setup to publish managed state and create the window, then expose the
     // fixed command registry.

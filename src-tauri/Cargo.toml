@@ -6,6 +6,7 @@ members = [
     "crates/tt-ports",
     "crates/tt-application",
     "crates/tt-adapter-http",
+    "crates/tt-adapter-external-import",
     "crates/tt-adapter-mcp",
     "crates/tt-adapter-tokenization",
     "crates/tt-adapter-sync",
@@ -63,3 +64,11 @@ lto = true
 opt-level = "s"
 panic = "unwind"
 strip = "symbols"
+
+# tests/perf/backend.mjs: release code generation, built incrementally, with the symbols callgrind splits steps at.
+[profile.perf]
+inherits = "release"
+codegen-units = 16
+incremental = true
+lto = false
+strip = "none"

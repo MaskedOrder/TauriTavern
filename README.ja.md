@@ -37,7 +37,7 @@
 [![Linux](https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black&style=flat-square)](https://tauritavern.github.io/en/downloads/platforms/)
 [![Android](https://img.shields.io/badge/Android-3DDC84?logo=android&logoColor=white&style=flat-square)](https://tauritavern.github.io/en/downloads/platforms/)
 [![iOS TestFlight](https://img.shields.io/badge/iOS-TestFlight-0D96F6?logo=apple&logoColor=white&style=flat-square)](https://testflight.apple.com/join/gpqAdeTm)
-[![HarmonyOS Beta](https://img.shields.io/badge/HarmonyOS-Beta-000000?logo=harmonyos&logoColor=white&style=flat-square)](https://github.com/Darkatse/TauriTavern/releases/latest)
+[![HarmonyOS Beta](https://img.shields.io/badge/HarmonyOS-Beta-000000?logo=harmonyos&logoColor=white&style=flat-square)](https://tauritavern.github.io/en/downloads/platforms/)
 
 [すべてのプラットフォーム](https://tauritavern.github.io/en/downloads/platforms/) · [GitHub Releases](https://github.com/Darkatse/TauriTavern/releases)
 
@@ -142,6 +142,8 @@ nix profile add github:Darkatse/TauriTavern/Canary#canary
 > **Windowsポータブル版**：システムにWebView2ランタイムが必要です。
 >
 > **HarmonyOS（ベータ）**：ReleaseのHAPはHarmonyOS NEXT向けです。ご自身の証明書で署名してからインストールしてください。[Auto-Installer](https://github.com/likuai2010/auto-installer/)の利用をおすすめします。現在はエミュレーターでのみテストしています。
+>
+> **アプリが起動しないとき**：3分以内にTauriTavernの終了と再起動を5回続けると、セーフモードに入るか確認されます。
 
 ## TauriTavernとは
 

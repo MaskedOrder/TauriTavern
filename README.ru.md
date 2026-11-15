@@ -37,7 +37,7 @@
 [![Linux](https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black&style=flat-square)](https://tauritavern.github.io/en/downloads/platforms/)
 [![Android](https://img.shields.io/badge/Android-3DDC84?logo=android&logoColor=white&style=flat-square)](https://tauritavern.github.io/en/downloads/platforms/)
 [![iOS TestFlight](https://img.shields.io/badge/iOS-TestFlight-0D96F6?logo=apple&logoColor=white&style=flat-square)](https://testflight.apple.com/join/gpqAdeTm)
-[![HarmonyOS Beta](https://img.shields.io/badge/HarmonyOS-Beta-000000?logo=harmonyos&logoColor=white&style=flat-square)](https://github.com/Darkatse/TauriTavern/releases/latest)
+[![HarmonyOS Beta](https://img.shields.io/badge/HarmonyOS-Beta-000000?logo=harmonyos&logoColor=white&style=flat-square)](https://tauritavern.github.io/en/downloads/platforms/)
 
 [Все платформы](https://tauritavern.github.io/en/downloads/platforms/) · [Релизы на GitHub](https://github.com/Darkatse/TauriTavern/releases)
 
@@ -142,6 +142,8 @@ nix profile add github:Darkatse/TauriTavern/Canary#canary
 > **Портативная версия для Windows**: в системе должен быть установлен WebView2 Runtime.
 >
 > **HarmonyOS (бета)**: HAP в релизах предназначен для HarmonyOS NEXT. Перед установкой подпишите его своим сертификатом; рекомендуем [Auto-Installer](https://github.com/likuai2010/auto-installer/). Пока он тестировался только на эмуляторе.
+>
+> **Если приложение не открывается**: закройте и снова откройте TauriTavern 5 раз подряд в течение 3 минут — приложение спросит, включить ли безопасный режим.
 
 ## Что такое TauriTavern
 

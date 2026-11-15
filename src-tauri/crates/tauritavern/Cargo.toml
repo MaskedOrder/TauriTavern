@@ -4,6 +4,7 @@ version = "2.4.0"
 description = "SillyTavern backend rebuilt with Tauri and Rust"
 authors = ["TauriTavern Team"]
 edition = "2024"
+default-run = "tauritavern"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -13,6 +14,16 @@ edition = "2024"
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "tauritavern_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "tauritavern"
+path = "src/main.rs"
+# main.rs has no tests, and a test harness for it would link the whole app once more.
+test = false
+
+[[bin]]
+name = "tt-perf"
+required-features = ["perf"]
 
 [build-dependencies]
 tauri-build = { version = "2.7.2", features = [] }
@@ -35,8 +46,7 @@ tracing-appender = "0.2"
 chrono = { workspace = true }
 tokio = { version = "1", default-features = false, features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 tokio-util = { version = "0.7", default-features = false, features = ["io", "rt"] }
-futures-util = "0.3"
-reqwest = { workspace = true, features = ["http2", "json", "rustls", "socks", "stream"] }
+reqwest = { workspace = true, features = ["http2", "json", "rustls", "socks"] }
 bytes = "1"
 base64 = "0.23"
 uuid = { workspace = true }
@@ -48,11 +58,13 @@ mime_guess = "2.0.5"
 filetime = "0.2"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 dunce = "1"
+rayon = "1.10"
 tt-domain = { path = "../tt-domain" }
 tt-contracts = { path = "../tt-contracts" }
 tt-ports = { path = "../tt-ports" }
 tt-application = { path = "../tt-application" }
 tt-adapter-http = { path = "../tt-adapter-http" }
+tt-adapter-external-import = { path = "../tt-adapter-external-import" }
 tt-adapter-mcp = { path = "../tt-adapter-mcp" }
 tt-adapter-tokenization = { path = "../tt-adapter-tokenization" }
 tt-adapter-sync = { path = "../tt-adapter-sync" }
@@ -73,6 +85,9 @@ ttsync-core = { workspace = true }
 [dev-dependencies]
 tt-application = { path = "../tt-application", features = ["test-support"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 # Cargo dependency selection cannot see tauri-build's desktop/mobile cfg aliases.
 [target.'cfg(any(target_os = "macos", windows, all(target_os = "linux", not(target_env = "ohos"))))'.dependencies]
@@ -106,7 +121,7 @@ dispatch2 = "0.3.1"
 objc2-background-tasks = "0.3.2"
 objc2-uniform-type-identifiers = { version = "0.3.2", default-features = false, features = ["std", "UTType"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSError", "NSFileManager", "NSData", "NSGeometry", "objc2-core-foundation", "NSItemProvider", "NSString", "NSURL"] }
-objc2-ui-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-core-foundation", "objc2-uniform-type-identifiers", "NSLayoutAnchor", "NSLayoutConstraint", "UIKeyboardLayoutGuide", "UILayoutGuide", "UITrackingLayoutGuide", "UIColor", "UIImage", "UIImageView", "UIScreen", "UIActivity", "UIActivityItemsConfiguration", "UIActivityItemsConfigurationReading", "UIActivityViewController", "UIAlertController", "UIApplication", "UIControl", "UIDocumentPickerViewController", "UIPopoverPresentationController", "UIPresentationController", "UIResponder", "UIScrollView", "UIGestureRecognizer", "UIPanGestureRecognizer", "UITextField", "UIView", "UIViewController", "UIWindow", "UIGeometry"] }
+objc2-ui-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-core-foundation", "objc2-uniform-type-identifiers", "NSLayoutAnchor", "NSLayoutConstraint", "UIKeyboardLayoutGuide", "UILayoutGuide", "UITrackingLayoutGuide", "UIColor", "UIImage", "UIImageView", "UIScreen", "UIActivity", "UIActivityItemsConfiguration", "UIActivityItemsConfigurationReading", "UIActivityViewController", "UIAlertController", "UIApplication", "UIControl", "UIDocumentPickerViewController", "UIPopoverPresentationController", "UIPresentationController", "UIResponder", "UIScrollView", "UIGestureRecognizer", "UIPanGestureRecognizer", "UITextField", "UIView", "UIViewController", "UIWindow", "UIGeometry", "UIAccessibility", "UIAction", "UIButton", "UIButtonConfiguration", "UICornerConfiguration", "UIGlassEffect", "UIImageConfiguration", "UIImageSymbolConfiguration", "UIInteraction", "UIInterface", "UILargeContentViewer", "UIMenuElement", "UIStackView", "UITraitCollection", "UIViewLayoutRegion", "UIVisualEffect", "UIVisualEffectView"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.4"
@@ -118,3 +133,5 @@ default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
 devtools-pilot = ["dep:tauri-plugin-pilot"]
 portable = []
+# The backend perf replay (tests/perf/backend.mjs).
+perf = ["tauri/test"]

@@ -59,7 +59,7 @@ class MainActivity : TauriActivity(), AndroidWebFullscreenHost {
   }
 
   private val shareIntentParser: ShareIntentParser by lazy {
-    ShareIntentParser(contentResolver = contentResolver, cacheDir = cacheDir)
+    ShareIntentParser(contentResolver = contentResolver)
   }
 
   private val sharePayloadDispatcher: SharePayloadDispatcher by lazy {

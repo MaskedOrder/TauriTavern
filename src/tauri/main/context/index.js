@@ -75,6 +75,7 @@ export function createTauriMainContext({ invoke }) {
         normalizeCharacter: characterService.normalizeCharacter,
         normalizeExtensions: characterService.normalizeExtensions,
         getAllCharacters: characterService.getAllCharacters,
+        ensureCharacterIndex: characterService.ensureCharacterIndex,
         invalidateCharacterCache: characterService.invalidateCharacterCache,
         resolveCharacterId: characterService.resolveCharacterId,
         resolveExistingCharacterId: characterService.resolveExistingCharacterId,
@@ -93,6 +94,7 @@ export function createTauriMainContext({ invoke }) {
         editCharacterAvatarFromForm: characterFormService.editCharacterAvatarFromForm,
         uploadAvatarFromForm: characterFormService.uploadAvatarFromForm,
         materializeUploadFile: uploadService.materializeUploadFile,
+        adoptStagedFile: uploadService.adoptStagedFile,
         createChatBackupDownloadStream: readableFileStreamService.createChatBackupDownloadStream,
         createReadableFileStream: readableFileStreamService.createReadableFileStream,
     };

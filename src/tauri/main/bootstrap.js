@@ -1,5 +1,6 @@
 import { installWindowLayout } from '../../scripts/util/window-layout.js';
 import { installWindowBackdrop } from '../../scripts/window-backdrop.js';
+import { installDrawerBar } from '../../scripts/drawer-bar.js';
 import { invoke } from '../../tauri-bridge.js';
 import { eventSource, event_types } from '../../scripts/events.js';
 import { createTauriMainContext } from './context.js';
@@ -41,6 +42,7 @@ import {
     getMethod,
     getMethodHint,
     jsonResponse,
+    ownedJsonResponse,
     readRequestBody,
     textResponse,
     toUrl,
@@ -117,10 +119,11 @@ function getWindowOrigin(targetWindow) {
  *
  * Keep this object minimal: it should be an API surface, not a dumping ground.
  *
- * @param {any} context
+ * @param {import('./context/types.js').TauriMainContext} context
+ * @returns {TauriTavernHostAbi}
  */
 function installHostAbi(context) {
-    window.__TAURITAVERN__ = {
+    const hostAbi = {
         abiVersion: HOST_ABI_VERSION,
         traceHeader: DEFAULT_TRACE_HEADER,
         ready: null,
@@ -136,7 +139,10 @@ function installHostAbi(context) {
             thumbnailUrl: window.__TAURITAVERN_THUMBNAIL__,
             backgroundPath: window.__TAURITAVERN_BACKGROUND_PATH__,
         },
+        api: {},
     };
+    window.__TAURITAVERN__ = hostAbi;
+    return hostAbi;
 }
 
 function installSameOriginWindowPatches(interceptors, downloadBridge, { runtimeCompat } = {}) {
@@ -255,9 +261,10 @@ export function bootstrapTauriMain() {
     installNativeShareBridge();
 
     const context = createTauriMainContext({ invoke });
-    installHostAbi(context); installLayoutApi(); installChatApi(context); installChatSurfaceApi(); installCharacterCardsApi(context);
-    const restoreAgentAssemblyBridges = installAgentApi(context);
-    installLlmConnectionsApi(context); installMcpApi(context); installSkillApi(context); installDevApi(context); installExtensionStoreApi(context); installDbApi(context); installWorldInfoApi();
+    const { api } = installHostAbi(context);
+    installLayoutApi(api, context); installChatApi(api, context); installChatSurfaceApi(api); installCharacterCardsApi(api, context);
+    const restoreAgentAssemblyBridges = installAgentApi(api, context);
+    installLlmConnectionsApi(api, context); installMcpApi(api, context); installSkillApi(api, context); installDevApi(api, context); installExtensionStoreApi(api, context); installDbApi(api, context); installWorldInfoApi(api);
     installMainApiOptionParking();
     installWorldInfoGlobalSelectorSelect2Enforcer();
     if (perfEnabled) {
@@ -270,7 +277,7 @@ export function bootstrapTauriMain() {
         window.__TAURITAVERN_PERF_READY__ = perfReadyPromise;
     }
     const router = createRouteRegistry();
-    registerRoutes(router, context, { jsonResponse, textResponse });
+    registerRoutes(router, context, { jsonResponse, ownedJsonResponse, textResponse });
 
     const nextTraceId = createTraceIdFactory('req');
 
@@ -375,6 +382,7 @@ export function bootstrapTauriMain() {
     runAfterTauriReady(() => setFrontendLogBackendForwardingEnabled(true));
     runAfterTauriReady(() => {
         installWindowBackdrop(context);
+        installDrawerBar(context);
         void installWindowLayout(context).catch(error => console.error('[TauriTavern] Window layout:', error));
     });
 

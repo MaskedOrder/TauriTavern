@@ -217,10 +217,15 @@ type TauriTavernAgentModelContentPart =
         images?: { path: string; mimeType: string }[];
     } };
 
+type TauriTavernChatCompletionMessage = {
+    role: 'system' | 'developer' | 'user' | 'assistant' | 'tool';
+    [field: string]: unknown;
+};
+
 type TauriTavernAgentPromptSnapshot = {
     acceptsImages?: boolean;
     contextLimits?: { context: number; response: number; tokenizerModel: string };
-    messages: TauriTavernAgentModelMessage[];
+    messages: Array<TauriTavernAgentModelMessage | TauriTavernChatCompletionMessage>;
     generationParameters: Record<string, unknown>;
     contextPolicy: { initialChatHistoryMessages: number; includeActivatedWorldInfo: boolean };
     worldInfoActivation?: Record<string, unknown>;
@@ -1318,9 +1323,21 @@ type TauriTavernCharacterImportResult = {
     lorebook: TauriTavernCharacterLorebookAdoption | { status: 'failed' };
 };
 
+type TauriTavernStagedFile = import('./tauri/main/services/files/staged-file.js').StagedFile;
+
+type TauriTavernUrlContent =
+    | { kind: 'character'; file: TauriTavernStagedFile }
+    | { kind: 'lorebook'; file: File };
+
 type TauriTavernCharacterCardsApi = {
-    isNativePickerAvailable: () => boolean;
-    pickFiles: (options?: TauriTavernCharacterCardsPickOptions) => Promise<File[] | null>;
+    /** Project: `null` when cancelled. */
+    pickFiles: (options?: TauriTavernCharacterCardsPickOptions) => Promise<TauriTavernStagedFile[] | null>;
+    /** Project: character cards only. */
+    stageFromUrl: (url: string) => Promise<TauriTavernStagedFile>;
+    /** Project. */
+    contentFromUrl: (url: string) => Promise<TauriTavernUrlContent>;
+    /** Project, Android only. */
+    stageSharedFile: (uri: string, name: string) => Promise<TauriTavernStagedFile>;
     /** Project: adopt the stored card's embedded lorebook using its current binding. */
     adoptLorebook: (avatar: string) => Promise<TauriTavernCharacterLorebookAdoption>;
     /** Project: apply a decision returned by import or adoptLorebook. */
@@ -1413,7 +1430,7 @@ type TauriTavernHostAbi = {
     ready: Promise<void> | null;
     invoke: TauriTavernHostInvokeApi;
     assets: TauriTavernHostAssetsApi;
-    api?: TauriTavernHostApi;
+    api: TauriTavernHostApi;
 };
 
 type TauriTavernHostUnsubscribe = () => void | Promise<void>;

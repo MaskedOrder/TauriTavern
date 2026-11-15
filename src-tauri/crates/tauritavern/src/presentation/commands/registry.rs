@@ -1,6 +1,7 @@
 pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
         super::window_layout_commands::get_window_snapshot,
+        super::window_layout_commands::set_drawer_bar_items,
         super::window_layout_commands::capture_content_viewport,
         super::window_layout_commands::set_window_backdrop,
         // TriviumDB commands
@@ -112,6 +113,10 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         super::bootstrap_commands::get_bootstrap_metadata,
         super::bootstrap_commands::backend_error_bridge_ready,
         super::bootstrap_commands::wait_for_backend_ready,
+        // Safe mode commands
+        super::safe_mode_commands::get_safe_mode_prompt,
+        super::safe_mode_commands::dismiss_safe_mode_prompt,
+        super::safe_mode_commands::request_safe_mode,
         // Settings commands
         super::settings_commands::get_tauritavern_settings,
         super::settings_commands::get_chat_backup_storage_stats,
@@ -139,6 +144,7 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         super::dev_logging_commands::devlog_get_llm_api_log_preview,
         super::dev_logging_commands::devlog_get_llm_api_log_raw,
         // World info commands
+        super::world_info_commands::list_world_info,
         super::world_info_commands::get_world_info,
         super::world_info_commands::normalize_world_info_name,
         super::world_info_commands::begin_world_info_commit,
@@ -193,7 +199,6 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         // Content commands
         super::content_commands::initialize_default_content,
         super::content_commands::is_default_content_initialized,
-        super::content_commands::download_external_import_url,
         // Asset library commands
         super::asset_commands::get_assets_library,
         super::asset_commands::download_asset,
@@ -252,10 +257,13 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         super::tt_sync_commands::tt_sync_push,
         // Upload staging commands
         super::file_transfer_commands::pick_import_files,
+        #[cfg(target_os = "android")]
+        super::file_transfer_commands::stage_shared_file,
         super::file_transfer_commands::deliver_staged_file,
         super::file_staging_commands::stage_file_begin,
         super::file_staging_commands::stage_file_chunk,
         super::file_staging_commands::stage_file_finish,
+        super::file_staging_commands::stage_content_from_url,
         super::file_staging_commands::stage_file_from_url,
         super::file_staging_commands::stage_file_discard,
         // Chat payload commit commands
@@ -396,6 +404,7 @@ pub fn invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Sen
         // Tokenizer commands
         super::tokenizer_commands::count_openai_tokens_batch,
         super::tokenizer_commands::count_openai_token_prefixes,
+        super::tokenizer_commands::count_text_tokens,
         super::tokenizer_commands::encode_tokens,
         super::tokenizer_commands::decode_tokens,
         super::tokenizer_commands::build_openai_logit_bias,
